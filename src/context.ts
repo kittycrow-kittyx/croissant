@@ -15,6 +15,18 @@ const SCALARS: Readonly<Record<string, string>> = {
   undefined: "void", null: "void"
 };
 
+const C_KEYWORDS = new Set([
+  "auto", "break", "case", "char", "const", "continue", "default", "do",
+  "double", "else", "enum", "extern", "float", "for", "goto", "if",
+  "inline", "int", "long", "register", "restrict", "return", "short",
+  "signed", "sizeof", "static", "struct", "switch", "typedef", "union",
+  "unsigned", "void", "volatile", "while", "_Bool", "_Atomic", "_Generic"
+]);
+
+export function cIdentifier(name: string): string {
+  return C_KEYWORDS.has(name) ? "croissant_" + name : name;
+}
+
 export class Context {
   readonly symbols = new Map<ts.Symbol, string>();
   readonly structs = new Map<string, ts.InterfaceDeclaration>();
@@ -46,7 +58,7 @@ export class Context {
       symbol = checker.getAliasedSymbol(symbol);
     }
     if (symbol && this.symbols.has(symbol)) return this.symbols.get(symbol)!;
-    return name.text;
+    return cIdentifier(name.text);
   }
 
   register(name: ts.Identifier, cName: string): void {
