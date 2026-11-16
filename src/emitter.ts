@@ -1,7 +1,8 @@
 import ts from "typescript";
-import { Context } from "./context.js";
+import { Context, cIdentifier } from "./context.js";
 
 const indent = (depth: number): string => "  ".repeat(depth);
+const condition = (value: string): string => value.startsWith("(") && value.endsWith(")") ? value : "(" + value + ")";
 const op = (kind: ts.SyntaxKind): string => {
   const name = ts.tokenToString(kind);
   if (!name) throw new Error("Unknown operator: " + ts.SyntaxKind[kind]);
@@ -59,7 +60,7 @@ export class Emitter {
         " : " + f(node.whenFalse, expected) + ")";
     }
     if (ts.isPropertyAccessExpression(node)) {
-      return "(" + f(node.expression) + ")." + node.name.text;
+      return "(" + f(node.expression) + ")." + cIdentifier(node.name.text);
     }
     if (ts.isElementAccessExpression(node)) {
       return this.ctx.fail(node, "CR205", "unlowered indexed access requires a native C intrinsic");
@@ -87,9 +88,9 @@ export class Emitter {
       for (const property of node.properties) {
         if (ts.isPropertyAssignment(property)) {
           if (!ts.isIdentifier(property.name)) return this.ctx.fail(property, "CR209", "computed object field");
-          fields.push("." + property.name.text + " = " + f(property.initializer));
+          fields.push("." + cIdentifier(property.name.text) + " = " + f(property.initializer));
         } else if (ts.isShorthandPropertyAssignment(property)) {
-          fields.push("." + property.name.text + " = " + f(property.name));
+          fields.push("." + cIdentifier(property.name.text) + " = " + f(property.name));
         } else return this.ctx.fail(property, "CR210", "unsupported object construction");
       }
       return "(" + type + "){ " + fields.join(", ") + " }";
@@ -113,7 +114,7 @@ export class Emitter {
         if (!ts.isIdentifier(decl.name)) return this.ctx.fail(decl, "CR214", "destructuring survived Bake");
         const type = this.ctx.type(decl.type, decl.name);
         if (!decl.initializer) return pre + type + " " + decl.name.text + ";\n";
-        return pre + type + " " + decl.name.text + " = " + f(decl.initializer, type) + ";\n";
+        return pre + type + " " + cIdentifier(decl.name.text) + " = " + f(decl.initializer, type) + ";\n";
       }).join("");
     }
     if (ts.isReturnStatement(node)) {
@@ -128,7 +129,7 @@ export class Emitter {
       return pre + "if (" + f(node.expression) + ") " + yes + no + "\n";
     }
     if (ts.isWhileStatement(node)) {
-      return pre + "while (" + f(node.expression) + ") " + (ts.isBlock(node.statement)
+      return pre + "while " + condition(f(node.expression)) + " " + (ts.isBlock(node.statement)
         ? s(node.statement, depth) : "{\n" + s(node.statement, depth + 1) + pre + "}") + "\n";
     }
     if (ts.isDoStatement(node)) {
@@ -178,7 +179,7 @@ export class Emitter {
       if (!ts.isIdentifier(param.name) || param.dotDotDotToken) {
         return this.ctx.fail(param, "CR221", "unsupported native function parameter");
       }
-      return this.ctx.type(param.type, param.name) + " " + param.name.text;
+      return this.ctx.type(param.type, param.name) + " " + cIdentifier(param.name.text);
     });
     return returns + " " + name + "(" + (params.length ? params.join(", ") : "void") + ")";
   }
