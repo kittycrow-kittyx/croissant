@@ -126,7 +126,7 @@ export class Emitter {
       const no = node.elseStatement
         ? " else " + (ts.isBlock(node.elseStatement) ? s(node.elseStatement, depth) :
             "{\n" + s(node.elseStatement, depth + 1) + pre + "}") : "";
-      return pre + "if (" + f(node.expression) + ") " + yes + no + "\n";
+      return pre + "if " + condition(f(node.expression)) + " " + yes + no + "\n";
     }
     if (ts.isWhileStatement(node)) {
       return pre + "while " + condition(f(node.expression)) + " " + (ts.isBlock(node.statement)
