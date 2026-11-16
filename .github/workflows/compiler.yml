@@ -1,0 +1,92 @@
+name: Croissant compiler
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compiler:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Croissant
+        uses: actions/checkout@v4
+        with:
+          path: croissant
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        working-directory: croissant
+        run: npm install
+
+      - name: Type-check and compile
+        working-directory: croissant
+        run: npm run check && npm run build
+
+      - name: Run compiler tests
+        working-directory: croissant
+        run: npm test
+
+      - name: Check freestanding C for ARM64 and x86-64
+        working-directory: croissant
+        run: |
+          clang --target=x86_64-unknown-none-elf -std=c11 -ffreestanding -fsyntax-only -Werror build/fixture.c
+          clang --target=aarch64-none-elf -std=c11 -ffreestanding -fsyntax-only -Werror build/fixture.c
+
+  thistle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Croissant
+        uses: actions/checkout@v4
+        with:
+          path: croissant
+
+      - name: Check out Bake
+        uses: actions/checkout@v4
+        with:
+          repository: kitty-crow/bake
+          path: bake
+
+      - name: Check out Thistle
+        uses: actions/checkout@v4
+        with:
+          repository: kitty-crow/thistle
+          path: thistle
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install compiler dependencies
+        run: |
+          npm install --prefix bake
+          npm install --prefix croissant
+
+      - name: Build and lower Thistle
+        run: |
+          npm run build --prefix croissant
+          node croissant/dist/src/thistle-project.js thistle
+          cd bake
+          bun src/cli.ts --project ../thistle/tsconfig.croissant.json --out-dir build/croissant-bake --target=clang
+          cd ..
+
+      - name: Emit native C
+        run: node croissant/dist/src/cli.js --manifest thistle/build/croissant-bake/bake-manifest.json --out croissant/build/thistle.c
+
+      - name: Compile native C for x86-64 and ARM64
+        run: |
+          clang --target=x86_64-unknown-none-elf -std=c11 -ffreestanding -Werror -fsyntax-only croissant/build/thistle.c
+          clang --target=aarch64-none-elf -std=c11 -ffreestanding -Werror -fsyntax-only croissant/build/thistle.c
