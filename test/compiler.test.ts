@@ -69,7 +69,7 @@ test("compiles typed Bake subset to freestanding C for two architectures", () =>
       "  croissant_native_kernel_ts__CpuState cpu = croissant_native_kernel_ts__initial(0);",
       "  return croissant_native_kernel_ts__step(cpu, 6) == UINT64_C(0x100f) ? 0 : 1;",
       "}"
-    ].join("\\n"));
+    ].join("\n"));
     const compiled = spawnSync("clang", ["-std=c11", "-O1", harness, "-o", executable], { encoding: "utf8" });
     assert.equal(compiled.status, 0, compiled.stderr);
     const executed = spawnSync(executable, [], { encoding: "utf8" });
