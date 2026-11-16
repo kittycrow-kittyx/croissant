@@ -28,6 +28,15 @@ const header = [
   "#include <stdint.h>",
   "#include <stdbool.h>",
   "#include <stddef.h>",
+  "/* Native numeric intrinsics preserve JavaScript 32-bit operations. */",
+  "extern int32_t croissant_js_and(double, double);",
+  "extern int32_t croissant_js_or(double, double);",
+  "extern int32_t croissant_js_xor(double, double);",
+  "extern int32_t croissant_js_shl(double, double);",
+  "extern int32_t croissant_js_shr(double, double);",
+  "extern uint32_t croissant_js_ushr(double, double);",
+  "extern int32_t croissant_js_not(double);",
+  "extern double croissant_js_remainder(double, double);",
   ""
 ].join("\n");
 
