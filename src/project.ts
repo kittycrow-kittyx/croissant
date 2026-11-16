@@ -105,7 +105,7 @@ export function emitProject(input: ProjectInputs): ProjectResult {
       "void croissant_init_globals(void) {",
       ...globals.map(item => {
         const initial = item.declaration.initializer;
-        if (!initial) context.fail(item.declaration, "CR308", "uninitialised top-level native variable");
+        if (!initial) return context.fail(item.declaration, "CR308", "uninitialised top-level native variable");
         return "  " + item.name + " = " +
           emitter.expression(initial, context.type(item.declaration.type, item.declaration.name)) + ";";
       }), "}"
