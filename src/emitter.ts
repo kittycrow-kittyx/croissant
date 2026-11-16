@@ -112,7 +112,7 @@ export class Emitter {
       return node.declarationList.declarations.map(decl => {
         if (!ts.isIdentifier(decl.name)) return this.ctx.fail(decl, "CR214", "destructuring survived Bake");
         const type = this.ctx.type(decl.type, decl.name);
-        if (!decl.initializer) return this.ctx.fail(decl, "CR215", "uninitialised local variable requires definite assignment analysis");
+        if (!decl.initializer) return pre + type + " " + decl.name.text + ";\n";
         return pre + type + " " + decl.name.text + " = " + f(decl.initializer, type) + ";\n";
       }).join("");
     }
