@@ -94,14 +94,3 @@ jobs:
           file croissant/build/thistle-x86_64.o croissant/build/thistle-aarch64.o
           nm -g croissant/build/thistle-x86_64.o | grep tetoKernelInit
 
-      - name: Publish generated native compiler artefacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: croissant-thistle-native
-          path: |
-            croissant/build/thistle.c
-            croissant/build/thistle-x86_64.o
-            croissant/build/thistle-aarch64.o
-          if-no-files-found: warn
-          retention-days: 7
