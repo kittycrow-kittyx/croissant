@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import { CompilerError, Context } from "./context.js";
+import { CompilerError, Context, cIdentifier } from "./context.js";
 import { Emitter } from "./emitter.js";
 
 export interface CompileRequest {
@@ -150,7 +150,7 @@ export function compile(request: CompileRequest): CompileResult {
         const key = prop.name;
         if (!key || !ts.isIdentifier(key)) return ctx.fail(prop, "CR306", "computed native record property");
         const type = ctx.type(prop.type, prop);
-        return { name: key.text, type };
+        return { name: cIdentifier(key.text), type };
       });
       if (fields.some(field => structs.some(other => other.name === field.type) && !available.has(field.type))) {
         continue;
