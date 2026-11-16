@@ -73,6 +73,7 @@ export class Emitter {
       if (decl && ("parameters" in decl)) {
         for (let i = args.length; i < decl.parameters.length; i++) {
           const parameter = decl.parameters[i]!;
+          if (!ts.isParameter(parameter)) return this.ctx.fail(node, "CR209", "JSDoc parameter requires a typed declaration");
           if (parameter.initializer) args.push(f(parameter.initializer));
           else if (parameter.questionToken) return this.ctx.fail(node, "CR207", "optional arguments need an explicit C sentinel");
           else return this.ctx.fail(node, "CR208", "missing required argument");
