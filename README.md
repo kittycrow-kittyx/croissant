@@ -2,9 +2,9 @@
 
 **CROISSANT**: Croissant Recursively Optimises Intermediate Sources, Synthesising Architecture-Neutral Translations.
 
-A TypeScript compiler backend that converts `Bake --target=clang` output into **freestanding C**. Its source is canonical Thistle, not a maintained C kernel fork. Croissant and its CLI are written entirely in TypeScript.
+Croissant compiles `Bake --target=clang` TypeScript into **freestanding C**. It is implemented in TypeScript and preserves Thistle as the canonical source of kernel behaviour.
 
-## Build
+## Build and test
 
 ```sh
 npm install
@@ -12,29 +12,58 @@ npm run check
 npm test
 ```
 
-The compiler consumes `bake-manifest.json`, resolves source modules and emits one C translation unit. Unsupported constructs cause a source-located `CRxxx` error; no partial C file is published.
+Croissant consumes `bake-manifest.json`, resolves cross-module symbols and generates a **modular C project**. One TypeScript implementation module produces one `.c` file and one `.h` header, with separate shared type, intrinsic, global and aggregator headers. A CMake project and provenance manifest are also generated.
 
 ```sh
-node dist/src/cli.js --manifest /path/to/bake-clang/bake-manifest.json --out build/thistle.c
+node dist/src/cli.js --manifest /path/to/bake-clang/bake-manifest.json --out-dir build/rei
+cmake -S build/rei -B build/rei-objects
+cmake --build build/rei-objects -j
 ```
+
+Output structure:
+
+```text
+build/rei/
+├── include/croissant/
+│   ├── types.h
+│   ├── intrinsics.h
+│   ├── globals.h
+│   ├── all.h
+│   ├── core/*.h
+│   ├── native/*.h
+│   └── vm/*.h
+├── src/
+│   ├── globals.c
+│   ├── core/*.c
+│   ├── native/*.c
+│   └── vm/*.c
+├── CMakeLists.txt
+└── croissant.manifest.json
+```
+
+Every generated C source is independently compiled and can be rebuilt without regenerating unrelated source files. Missing or unsupported operations cause a source-located `CRxxx` error before the source tree is published. Output publication uses a staging directory, and a failed compilation preserves previously published output.
+
+The legacy `--out build/rei.c` mode still emits a monolithic C file for compatibility. **New builds should use `--out-dir`.**
 
 ## Canonical Thistle pipeline
 
-With sibling checkouts named `croissant/`, `bake/` and `thistle/`, and Node, Bun and Clang installed:
+With sibling checkouts named `thistle/`, `bake/` and `croissant/`:
 
 ```sh
 npm install --prefix croissant
 npm install --prefix bake
 npm run build --prefix croissant
 node croissant/dist/src/thistle-project.js thistle
-(cd bake && bun src/cli.ts --project ../thistle/tsconfig.croissant.json --out-dir build/croissant-bake --target=clang)
-node croissant/dist/src/cli.js --manifest thistle/build/croissant-bake/bake-manifest.json --out croissant/build/thistle.c
-clang --target=x86_64-unknown-none-elf -std=c11 -O1 -ffreestanding -fno-builtin -fno-stack-protector -Werror -c croissant/build/thistle.c -o croissant/build/thistle-x86_64.o
-clang --target=aarch64-none-elf -std=c11 -O1 -ffreestanding -fno-builtin -fno-stack-protector -Werror -c croissant/build/thistle.c -o croissant/build/thistle-aarch64.o
+(cd bake && bun src/cli.ts --project ../thistle/tsconfig.croissant.json --out-dir build/croissant-bake --target=clang --engine=host)
+node croissant/dist/src/cli.js --manifest thistle/build/croissant-bake/bake-manifest.json --out-dir croissant/build/rei
+cmake -S croissant/build/rei -B croissant/build/rei-objects
+cmake --build croissant/build/rei-objects -j
 ```
 
-GitHub Actions runs this integration against Thistle's full native source and verifies both relocatable ELF objects. The pipeline leaves Bake's default WASM/Baguette lowering unchanged.
+GitHub Actions also builds every C translation unit individually for **x86-64 and AArch64** using freestanding Clang, and runs a linked native multi-module smoke test. Bake's default WASM/Baguette lowering remains unchanged.
 
-## Boundary
+## Relationship to Rei
 
-The C output is a **compile-time milestone**, not Rei yet. Native objects still contain unresolved `__bake_c_*` platform calls and Croissant's numeric conversion intrinsics. They cannot be linked or booted until these have freestanding implementations, a hardware abstraction layer, a linker script and an architecture-specific boot entry point. Generating valid C does not establish semantic equivalence for every arithmetic edge case, memory operation or concurrency path. Those are separate tests required before running the kernel on hardware.
+Like Teto, Rei should own its build orchestration and target integration, not a maintained fork of the Thistle kernel. Rei can pin a Thistle revision, invoke Bake and Croissant, then combine these generated modules with its native platform implementations, architecture boot code and linker scripts.
+
+Croissant's generated native objects currently retain unresolved `__bake_c_*` and numeric intrinsics. A successful compilation is **not** a linked, bootable Rei kernel or proof of complete semantic equivalence. Those require native implementations and further runtime validation.
