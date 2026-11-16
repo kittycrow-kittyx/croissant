@@ -86,7 +86,22 @@ jobs:
       - name: Emit native C
         run: node croissant/dist/src/cli.js --manifest thistle/build/croissant-bake/bake-manifest.json --out croissant/build/thistle.c
 
-      - name: Compile native C for x86-64 and ARM64
+      - name: Compile native objects for x86-64 and ARM64
         run: |
-          clang --target=x86_64-unknown-none-elf -std=c11 -ffreestanding -Werror -fsyntax-only croissant/build/thistle.c
-          clang --target=aarch64-none-elf -std=c11 -ffreestanding -Werror -fsyntax-only croissant/build/thistle.c
+          test -s croissant/build/thistle.c
+          clang --target=x86_64-unknown-none-elf -std=c11 -O1 -ffreestanding -fno-builtin -fno-stack-protector -Werror -c croissant/build/thistle.c -o croissant/build/thistle-x86_64.o
+          clang --target=aarch64-none-elf -std=c11 -O1 -ffreestanding -fno-builtin -fno-stack-protector -Werror -c croissant/build/thistle.c -o croissant/build/thistle-aarch64.o
+          file croissant/build/thistle-x86_64.o croissant/build/thistle-aarch64.o
+          nm -g croissant/build/thistle-x86_64.o | grep tetoKernelInit
+
+      - name: Publish generated native compiler artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: croissant-thistle-native
+          path: |
+            croissant/build/thistle.c
+            croissant/build/thistle-x86_64.o
+            croissant/build/thistle-aarch64.o
+          if-no-files-found: warn
+          retention-days: 7
