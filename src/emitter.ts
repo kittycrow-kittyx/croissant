@@ -67,7 +67,11 @@ export class Emitter {
       return "(" + f(node.left) + " " + op(kind) + " " + f(node.right) + ")";
     }
     if (ts.isPrefixUnaryExpression(node)) {
-      const operator = op(node.operator);\n      if (node.operator === ts.SyntaxKind.MinusToken && ts.isBigIntLiteral(node.operand)) {\n        const literal = node.operand.text.slice(0, -1).replaceAll("_", "");\n        return "(-INT64_C(" + literal + "))";\n      }
+      const operator = op(node.operator);
+      if (node.operator === ts.SyntaxKind.MinusToken && ts.isBigIntLiteral(node.operand)) {
+        const literal = node.operand.text.slice(0, -1).replaceAll("_", "");
+        return "(-INT64_C(" + literal + "))";
+      }
       if (node.operator === ts.SyntaxKind.TildeToken) {
         const type = this.ctx.program.getTypeChecker().getTypeAtLocation(ts.getOriginalNode(node.operand));
         return (type.flags & ts.TypeFlags.BigIntLike) ? "(~" + f(node.operand) + ")"
