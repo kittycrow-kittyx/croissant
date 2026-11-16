@@ -10,6 +10,7 @@ const fixture = [
   "export type I32 = number;",
   "export type U32 = number;",
   "export type U64 = bigint;",
+  "declare function __bake_c_bigint(value: number): bigint;",
   "export interface CpuState { readonly pc: U64; readonly hart: U32; }",
   "export const BASE: U64 = 0x1000n;",
   "export function add(left: U32, right: U32): U32 { return left + right; }",
@@ -19,7 +20,7 @@ const fixture = [
   "export function step(cpu: CpuState, delta: U32): U64 {",
   "  let index: U32 = 0;",
   "  for (let i: U32 = 0; i < delta; i += 1) index += i;",
-  "  if (index > 10) return cpu.pc + BigInt(index);",
+  "  if (index > 10) return cpu.pc + __bake_c_bigint(index);",
   "  return cpu.pc;",
   "}"
 ].join("\n");
@@ -48,7 +49,7 @@ test("compiles typed Bake subset to freestanding C for two architectures", () =>
     assert.equal(result.files, 1);
     assert.ok(result.functions >= 3);
     const generated = fs.readFileSync(out, "utf8");
-    assert.match(generated, /struct croissant_native_kernel__CpuState/);
+    assert.match(generated, /struct croissant_native_kernel_ts__CpuState/);
     assert.match(generated, /void croissant_init_globals\(void\)/);
     assert.match(generated, /for \(/);
     assert.doesNotMatch(generated, /require\(|WebAssembly|node_modules/);
