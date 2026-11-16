@@ -59,6 +59,21 @@ test("compiles typed Bake subset to freestanding C for two architectures", () =>
     ], { encoding: "utf8" });
     if (clang.error && (clang.error as NodeJS.ErrnoException).code === "ENOENT") return;
     assert.equal(clang.status, 0, clang.stderr);
+    const harness = out + ".harness.c";
+    const executable = out + ".harness";
+    fs.writeFileSync(harness, generated + [
+      "",
+      "uint64_t __bake_c_bigint(double value) { return (uint64_t)value; }",
+      "int main(void) {",
+      "  croissant_init_globals();",
+      "  croissant_native_kernel_ts__CpuState cpu = croissant_native_kernel_ts__initial(0);",
+      "  return croissant_native_kernel_ts__step(cpu, 6) == UINT64_C(0x100f) ? 0 : 1;",
+      "}"
+    ].join("\\n"));
+    const compiled = spawnSync("clang", ["-std=c11", "-O1", harness, "-o", executable], { encoding: "utf8" });
+    assert.equal(compiled.status, 0, compiled.stderr);
+    const executed = spawnSync(executable, [], { encoding: "utf8" });
+    assert.equal(executed.status, 0, executed.stderr);
     fs.mkdirSync(path.join(process.cwd(), "build"), { recursive: true });
     fs.copyFileSync(out, path.join(process.cwd(), "build/fixture.c"));
   } finally {
