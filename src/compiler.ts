@@ -135,8 +135,16 @@ export function compile(request: CompileRequest): CompileResult {
     for (let i = pending.length - 1; i >= 0; i--) {
       const item = pending[i]!;
       const properties = item.declaration.members.filter(ts.isPropertySignature);
-      if (properties.length !== item.declaration.members.length) {
-        ctx.fail(item.declaration, "CR305", "only fixed record properties are supported");
+      for (const member of item.declaration.members) {
+        if (ts.isPropertySignature(member)) continue;
+        if (ts.isIndexSignatureDeclaration(member) &&
+            member.parameters.length === 1 &&
+            member.parameters[0]?.type?.kind === ts.SyntaxKind.NumberKeyword &&
+            member.type && [ts.SyntaxKind.NumberKeyword, ts.SyntaxKind.BigIntKeyword].includes(member.type.kind)) {
+          // Element access must already be lowered to bounds-checked intrinsics.
+          continue;
+        }
+        ctx.fail(member, "CR305", "unsupported record field or index signature");
       }
       const fields = properties.map(prop => {
         const key = prop.name;
