@@ -20,7 +20,12 @@ export class Emitter {
       if (node.text === "undefined") return this.ctx.fail(node, "CR201", "undefined has no freestanding C value");
       return this.ctx.ident(node);
     }
-    if (ts.isNumericLiteral(node)) return node.text.replaceAll("_", "");
+    if (ts.isNumericLiteral(node)) {
+      const literal = node.text.replaceAll("_", "");
+      // TypeScript numeric literals are IEEE-754 doubles, not arbitrary-sized C integers.
+      if (/^[0-9]+$/.test(literal) && literal.length >= 16) return literal + ".0";
+      return literal;
+    }
     if (ts.isBigIntLiteral(node)) {
       const body = node.text.slice(0, -1).replaceAll("_", "");
       return "UINT64_C(" + body + ")";
@@ -44,12 +49,30 @@ export class Emitter {
           f(node.right) + ") & 31U))";
       }
       if (kind === ts.SyntaxKind.QuestionQuestionToken) return this.ctx.fail(node, "CR204", "nullish operator survived Bake");
+      const numeric = this.ctx.program.getTypeChecker().getTypeAtLocation(ts.getOriginalNode(node.left));
+      const isBig = (numeric.flags & ts.TypeFlags.BigIntLike) !== 0;
+      if (!isBig) {
+        const nativeOp: Partial<Record<ts.SyntaxKind, string>> = {
+          [ts.SyntaxKind.AmpersandToken]: "croissant_js_and",
+          [ts.SyntaxKind.BarToken]: "croissant_js_or",
+          [ts.SyntaxKind.CaretToken]: "croissant_js_xor",
+          [ts.SyntaxKind.LessThanLessThanToken]: "croissant_js_shl",
+          [ts.SyntaxKind.GreaterThanGreaterThanToken]: "croissant_js_shr",
+          [ts.SyntaxKind.PercentToken]: "croissant_js_remainder"
+        };
+        const intrinsic = nativeOp[kind];
+        if (intrinsic) return intrinsic + "(" + f(node.left) + ", " + f(node.right) + ")";
+      }
       if (kind === ts.SyntaxKind.CommaToken) return "(" + f(node.left) + ", " + f(node.right) + ")";
       return "(" + f(node.left) + " " + op(kind) + " " + f(node.right) + ")";
     }
     if (ts.isPrefixUnaryExpression(node)) {
-      const operator = op(node.operator);
-      if (node.operator === ts.SyntaxKind.TildeToken) return "(~" + f(node.operand) + ")";
+      const operator = op(node.operator);\n      if (node.operator === ts.SyntaxKind.MinusToken && ts.isBigIntLiteral(node.operand)) {\n        const literal = node.operand.text.slice(0, -1).replaceAll("_", "");\n        return "(-INT64_C(" + literal + "))";\n      }
+      if (node.operator === ts.SyntaxKind.TildeToken) {
+        const type = this.ctx.program.getTypeChecker().getTypeAtLocation(ts.getOriginalNode(node.operand));
+        return (type.flags & ts.TypeFlags.BigIntLike) ? "(~" + f(node.operand) + ")"
+          : "croissant_js_not(" + f(node.operand) + ")";
+      }
       return "(" + operator + f(node.operand) + ")";
     }
     if (ts.isPostfixUnaryExpression(node)) {
