@@ -100,9 +100,10 @@ export function compile(request: CompileRequest): CompileResult {
         } else functions.push({ name, declaration: statement });
       } else if (ts.isVariableStatement(statement)) {
         for (const decl of statement.declarationList.declarations) {
-          if (!ts.isIdentifier(decl.name)) ctx.fail(decl, "CR302", "top-level destructuring unsupported");
-          const name = ctx.module(source) + "__" + decl.name.text;
-          ctx.register(decl.name, name);
+          const id = decl.name;
+          if (!ts.isIdentifier(id)) return ctx.fail(decl, "CR302", "top-level destructuring unsupported");
+          const name = ctx.module(source) + "__" + id.text;
+          ctx.register(id, name);
           globals.push({ name, declaration: decl });
         }
       } else if (ts.isTypeAliasDeclaration(statement) ||
@@ -138,9 +139,10 @@ export function compile(request: CompileRequest): CompileResult {
         ctx.fail(item.declaration, "CR305", "only fixed record properties are supported");
       }
       const fields = properties.map(prop => {
-        if (!ts.isIdentifier(prop.name)) ctx.fail(prop, "CR306", "computed native record property");
+        const key = prop.name;
+        if (!key || !ts.isIdentifier(key)) return ctx.fail(prop, "CR306", "computed native record property");
         const type = ctx.type(prop.type, prop);
-        return { name: prop.name.text, type };
+        return { name: key.text, type };
       });
       if (fields.some(field => structs.some(other => other.name === field.type) && !available.has(field.type))) {
         continue;
@@ -176,10 +178,9 @@ export function compile(request: CompileRequest): CompileResult {
   text.push("void croissant_init_globals(void) {");
   for (const item of globals) {
     const type = ctx.type(item.declaration.type, item.declaration.name);
-    if (!item.declaration.initializer) {
-      ctx.fail(item.declaration, "CR308", "uninitialised top-level native variable");
-    }
-    text.push("  " + item.name + " = " + emitter.expression(item.declaration.initializer, type) + ";");
+    const initializer = item.declaration.initializer;
+    if (!initializer) return ctx.fail(item.declaration, "CR308", "uninitialised top-level native variable");
+    text.push("  " + item.name + " = " + emitter.expression(initializer, type) + ";");
   }
   text.push("}", "");
   for (const item of functions) {
