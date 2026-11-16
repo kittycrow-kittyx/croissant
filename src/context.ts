@@ -106,6 +106,7 @@ export class Context {
     if (ts.isArrayTypeNode(node)) this.fail(node, "CR106", "arrays require explicit native view types");
     if (ts.isLiteralTypeNode(node)) {
       if (ts.isNumericLiteral(node.literal)) return "double";
+      if (ts.isBigIntLiteral(node.literal)) return "uint64_t";
       if (node.literal.kind === ts.SyntaxKind.TrueKeyword || node.literal.kind === ts.SyntaxKind.FalseKeyword) return "bool";
     }
     return this.fail(node, "CR107", "unsupported TypeScript type " + ts.SyntaxKind[node.kind]);
