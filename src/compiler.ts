@@ -3,10 +3,12 @@ import path from "node:path";
 import ts from "typescript";
 import { CompilerError, Context, cIdentifier } from "./context.js";
 import { Emitter } from "./emitter.js";
+import { emitProject } from "./project.js";
 
 export interface CompileRequest {
   readonly manifestPath: string;
-  readonly outputPath: string;
+  readonly outputPath?: string;
+  readonly outputDir?: string;
 }
 
 export interface CompileResult {
@@ -15,6 +17,7 @@ export interface CompileResult {
   readonly globals: number;
   readonly interfaces: number;
   readonly outputPath: string;
+  readonly generatedFiles?: readonly string[];
 }
 
 type Manifest = {
@@ -41,6 +44,8 @@ const header = [
 ].join("\n");
 
 export function compile(request: CompileRequest): CompileResult {
+  if (Boolean(request.outputPath) === Boolean(request.outputDir))
+    throw new Error("CR000: specify exactly one of --out or --out-dir");
   const manifestPath = path.resolve(request.manifestPath);
   const root = path.dirname(manifestPath);
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Manifest;
@@ -175,6 +180,8 @@ export function compile(request: CompileRequest): CompileResult {
     if (!advanced) throw new Error("CR307: recursive native interface by value");
   }
 
+  const typeDefinitions = text.slice(1);
+
   // External intrinsic declarations are an ABI contract, never JS shims.
   for (const [name, decl] of externals) {
     const sig = emitter.functionSignature(decl, name);
@@ -205,7 +212,20 @@ export function compile(request: CompileRequest): CompileResult {
     text.push(emitter.function(item.declaration, item.name));
   }
 
-  const outputPath = path.resolve(request.outputPath);
+  if (request.outputDir) {
+    const project = emitProject({
+      destination: request.outputDir, context: ctx, emitter,
+      sources: sourceFiles, types: typeDefinitions, intrinsics: externals,
+      globals, functions
+    });
+    return {
+      files: files.length, functions: functions.length, globals: globals.length,
+      interfaces: structs.length, outputPath: project.directory,
+      generatedFiles: project.generatedFiles
+    };
+  }
+
+  const outputPath = path.resolve(request.outputPath!);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   // Atomic publication ensures a failed compiler cannot leave a partial C file.
   const temp = outputPath + ".tmp";

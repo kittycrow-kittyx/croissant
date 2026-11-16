@@ -83,14 +83,31 @@ jobs:
           bun src/cli.ts --project ../thistle/tsconfig.croissant.json --out-dir build/croissant-bake --target=clang
           cd ..
 
-      - name: Emit native C
-        run: node croissant/dist/src/cli.js --manifest thistle/build/croissant-bake/bake-manifest.json --out croissant/build/thistle.c
+      - name: Emit separate native modules and headers
+        run: node croissant/dist/src/cli.js --manifest thistle/build/croissant-bake/bake-manifest.json --out-dir croissant/build/rei
 
-      - name: Compile native objects for x86-64 and ARM64
+      - name: Compile every native module independently for x86-64 and ARM64
+        shell: bash
         run: |
-          test -s croissant/build/thistle.c
-          clang --target=x86_64-unknown-none-elf -std=c11 -O1 -ffreestanding -fno-builtin -fno-stack-protector -Werror -c croissant/build/thistle.c -o croissant/build/thistle-x86_64.o
-          clang --target=aarch64-none-elf -std=c11 -O1 -ffreestanding -fno-builtin -fno-stack-protector -Werror -c croissant/build/thistle.c -o croissant/build/thistle-aarch64.o
-          file croissant/build/thistle-x86_64.o croissant/build/thistle-aarch64.o
-          nm -g croissant/build/thistle-x86_64.o | grep tetoKernelInit
+          set -euo pipefail
+          test -s croissant/build/rei/src/native/kernel.c
+          test -s croissant/build/rei/include/croissant/native/kernel.h
+          test -s croissant/build/rei/croissant.manifest.json
+          for target in x86_64 aarch64; do
+            case "$target" in
+              x86_64) triple=x86_64-unknown-none-elf ;;
+              aarch64) triple=aarch64-none-elf ;;
+            esac
+            while IFS= read -r -d '' source; do
+              relative="${source#croissant/build/rei/src/}"
+              object="croissant/build/objects/$target/${relative%.c}.o"
+              mkdir -p "$(dirname "$object")"
+              clang --target="$triple" -std=c11 -O1 -ffreestanding \
+                -fno-builtin -fno-stack-protector -Werror \
+                -Icroissant/build/rei/include -c "$source" -o "$object"
+            done < <(find croissant/build/rei/src -type f -name '*.c' -print0 | sort -z)
+            test -s "croissant/build/objects/$target/native/kernel.o"
+            file "croissant/build/objects/$target/native/kernel.o"
+            nm -g "croissant/build/objects/$target/native/kernel.o" | grep tetoKernelInit
+          done
 
