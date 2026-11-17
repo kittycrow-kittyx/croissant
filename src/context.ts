@@ -105,6 +105,9 @@ export class Context {
       if (unique.length === 1) return unique[0]!;
       if (unique.every(type => ["uint32_t", "int32_t", "uint64_t", "int64_t", "double", "float"].includes(type))) {
         if (unique.includes("double") || unique.includes("float")) return "double";
+        // A mixed signed/unsigned 32-bit domain needs all 33 value bits.
+        // Choosing uint32_t changes negative values before widening.
+        if (unique.length === 2 && unique.includes("int32_t") && unique.includes("uint32_t")) return "int64_t";
         return unique.includes("uint64_t") ? "uint64_t" : unique.includes("int64_t") ? "int64_t" :
           unique.includes("uint32_t") ? "uint32_t" : "int32_t";
       }

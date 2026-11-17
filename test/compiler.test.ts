@@ -161,3 +161,41 @@ test("unsigned right shift uses JavaScript ToUint32 semantics", () => {
     fs.rmSync(root, { force: true, recursive: true });
   }
 });
+
+test("mixed signed and unsigned 32-bit arguments preserve their numeric value", () => {
+  const source = [
+    "export type I32 = number;",
+    "export type U32 = number;",
+    "export type I64 = bigint;",
+    "declare function __bake_c_bigint(value: number): bigint;",
+    "export function word(value: I32 | U32): I64 { return __bake_c_bigint(value); }",
+    "export function relative(pc: bigint, offset: I32): I64 { return pc + word(offset); }",
+    "export function unsignedWord(value: U32): I64 { return word(value); }"
+  ].join("\n");
+  const { root, manifestPath, out } = project({ "signed.ts": source });
+  try {
+    compile({ manifestPath, outputPath: out });
+    const generated = fs.readFileSync(out, "utf8");
+    assert.match(generated, /int64_t croissant_signed_ts__word\(int64_t value\)/);
+    const harness = out + ".harness.c";
+    const executable = out + ".harness";
+    fs.writeFileSync(harness, generated + [
+      "",
+      "uint64_t __bake_c_bigint(double x) { return x < 0 ? (uint64_t)(int64_t)x : (uint64_t)x; }",
+      "int main(void) {",
+      "  if (croissant_signed_ts__word(-1) != -1) return 1;",
+      "  if (croissant_signed_ts__word(INT32_MIN) != INT32_MIN) return 2;",
+      "  if (croissant_signed_ts__unsignedWord(UINT32_MAX) != INT64_C(4294967295)) return 3;",
+      "  if (croissant_signed_ts__relative(UINT64_C(0x2001a2), -76) != INT64_C(0x200156)) return 4;",
+      "  return 0;",
+      "}"
+    ].join("\n"));
+    const built = spawnSync("clang", ["-std=c11", "-O1", harness, "-o", executable], { encoding: "utf8" });
+    if (built.error && (built.error as NodeJS.ErrnoException).code === "ENOENT") return;
+    assert.equal(built.status, 0, built.stderr);
+    const executed = spawnSync(executable, [], { encoding: "utf8" });
+    assert.equal(executed.status, 0, executed.stderr);
+  } finally {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
+});
