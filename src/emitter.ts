@@ -45,8 +45,7 @@ export class Emitter {
         return this.ctx.fail(node, "CR203", "exponentiation needs a typed intrinsic");
       }
       if (kind === ts.SyntaxKind.GreaterThanGreaterThanGreaterThanToken) {
-        return "((uint32_t)(" + f(node.left) + ") >> ((uint32_t)(" +
-          f(node.right) + ") & 31U))";
+        return "croissant_js_ushr(" + f(node.left) + ", " + f(node.right) + ")";
       }
       if (kind === ts.SyntaxKind.QuestionQuestionToken) return this.ctx.fail(node, "CR204", "nullish operator survived Bake");
       const numeric = this.ctx.program.getTypeChecker().getTypeAtLocation(ts.getOriginalNode(node.left));

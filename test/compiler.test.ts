@@ -148,3 +148,16 @@ test("native buffer aliases retain identity even for equal-length allocations", 
     fs.rmSync(root, { force: true, recursive: true });
   }
 });
+
+test("unsigned right shift uses JavaScript ToUint32 semantics", () => {
+  const { root, manifestPath, out } = project({
+    "shift.ts": "export function shift(value: number, count: number): number { return value >>> count; }"
+  });
+  try {
+    compile({ manifestPath, outputPath: out });
+    const output = fs.readFileSync(out, "utf8");
+    assert.match(output, /return croissant_js_ushr\(value, count\);/);
+  } finally {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
+});

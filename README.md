@@ -76,3 +76,7 @@ the handle, not the backing storage. The platform resolves the handle and
 validates bounds; equal-length allocations must remain distinct. Rebuild
 all generated objects and their platform implementations together after
 this layout change. The Bake source-intrinsic contract is unchanged.
+
+Unsigned right shifts use the native JavaScript numeric intrinsic rather than
+an unchecked conversion from a negative floating-point value to uint32_t.
+This preserves the signed Math.imul result before the source's >>> 0 coercion.
