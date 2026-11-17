@@ -170,6 +170,13 @@ export function compile(request: CompileRequest): CompileResult {
         continue;
       }
       text.push("struct " + item.name + " {");
+      // Opaque allocation identity is part of the native intrinsic representation.
+      if (item.name === "__bake_c_Buffer") {
+        if (fields.some(field => field.name === "handle")) {
+          ctx.fail(item.declaration, "CR310", "native buffer handle is reserved by the backend");
+        }
+        text.push("  uint64_t handle;");
+      }
       for (const field of fields) text.push("  " + field.type + " " + field.name + ";");
       if (!fields.length) text.push("  unsigned char _croissant_empty;");
       text.push("};", "");

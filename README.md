@@ -67,3 +67,12 @@ GitHub Actions also builds every C translation unit individually for **x86-64 an
 Like Teto, Rei should own its build orchestration and target integration, not a maintained fork of the Thistle kernel. Rei can pin a Thistle revision, invoke Bake and Croissant, then combine these generated modules with its native platform implementations, architecture boot code and linker scripts.
 
 Croissant's generated native objects currently retain unresolved `__bake_c_*` and numeric intrinsics. A successful compilation is **not** a linked, bootable Rei kernel or proof of complete semantic equivalence. Those require native implementations and further runtime validation.
+
+### Native allocation identity
+
+Generated `__bake_c_Buffer` records carry a 64-bit opaque `handle` and
+`byteLength`, matching the allocation-identity model in Crust. Views copy
+the handle, not the backing storage. The platform resolves the handle and
+validates bounds; equal-length allocations must remain distinct. Rebuild
+all generated objects and their platform implementations together after
+this layout change. The Bake source-intrinsic contract is unchanged.

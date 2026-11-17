@@ -104,3 +104,47 @@ test("rejects non-Bake manifests before reading code", () => {
     fs.rmSync(root, { force: true, recursive: true });
   }
 });
+
+test("native buffer aliases retain identity even for equal-length allocations", () => {
+  const source = [
+    "interface __bake_c_Buffer { readonly byteLength: number; }",
+    "interface __bake_c_View { readonly buffer: __bake_c_Buffer; }",
+    "declare function __bake_c_new_buffer(size: number): __bake_c_Buffer;",
+    "declare function __bake_c_new_view(buffer: __bake_c_Buffer): __bake_c_View;",
+    "declare function __bake_c_view_set_u32(view: __bake_c_View, at: number, value: number, littleEndian: boolean): void;",
+    "declare function __bake_c_view_get_u32(view: __bake_c_View, at: number, littleEndian: boolean): number;",
+    "export function exercise(): number {",
+    "  const a = __bake_c_new_buffer(8);",
+    "  const b = __bake_c_new_buffer(8);",
+    "  const av = __bake_c_new_view(a);",
+    "  const alias = __bake_c_new_view(a);",
+    "  const bv = __bake_c_new_view(b);",
+    "  __bake_c_view_set_u32(av, 0, 17, true);",
+    "  __bake_c_view_set_u32(bv, 0, 29, true);",
+    "  return __bake_c_view_get_u32(alias, 0, true) * 100 + __bake_c_view_get_u32(bv, 0, true);",
+    "}"
+  ].join("\n");
+  const { root, manifestPath, out } = project({ "buffer.ts": source });
+  try {
+    compile({ manifestPath, outputPath: out });
+    const generated = fs.readFileSync(out, "utf8");
+    assert.match(generated, /struct __bake_c_Buffer \{\s*uint64_t handle;\s*double byteLength;/);
+    const harness = out + ".harness.c", executable = out + ".harness";
+    fs.writeFileSync(harness, generated + [
+      "",
+      "static uint32_t slots[2]; static uint64_t next;",
+      "__bake_c_Buffer __bake_c_new_buffer(double size) { return (__bake_c_Buffer){ .handle = ++next, .byteLength = size }; }",
+      "__bake_c_View __bake_c_new_view(__bake_c_Buffer buffer) { return (__bake_c_View){ .buffer = buffer }; }",
+      "void __bake_c_view_set_u32(__bake_c_View view, double at, double value, bool le) { slots[view.buffer.handle - 1] = (uint32_t)value; }",
+      "double __bake_c_view_get_u32(__bake_c_View view, double at, bool le) { return slots[view.buffer.handle - 1]; }",
+      "int main(void) { return croissant_buffer_ts__exercise() == 1729 ? 0 : 1; }"
+    ].join("\n"));
+    const built = spawnSync("clang", ["-std=c11", "-Werror", harness, "-o", executable], { encoding: "utf8" });
+    if ((built.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return;
+    assert.equal(built.status, 0, built.stderr);
+    const ran = spawnSync(executable, [], { encoding: "utf8" });
+    assert.equal(ran.status, 0, ran.stderr);
+  } finally {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
+});
