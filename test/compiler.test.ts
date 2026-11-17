@@ -104,3 +104,98 @@ test("rejects non-Bake manifests before reading code", () => {
     fs.rmSync(root, { force: true, recursive: true });
   }
 });
+
+test("native buffer aliases retain identity even for equal-length allocations", () => {
+  const source = [
+    "interface __bake_c_Buffer { readonly byteLength: number; }",
+    "interface __bake_c_View { readonly buffer: __bake_c_Buffer; }",
+    "declare function __bake_c_new_buffer(size: number): __bake_c_Buffer;",
+    "declare function __bake_c_new_view(buffer: __bake_c_Buffer): __bake_c_View;",
+    "declare function __bake_c_view_set_u32(view: __bake_c_View, at: number, value: number, littleEndian: boolean): void;",
+    "declare function __bake_c_view_get_u32(view: __bake_c_View, at: number, littleEndian: boolean): number;",
+    "export function exercise(): number {",
+    "  const a = __bake_c_new_buffer(8);",
+    "  const b = __bake_c_new_buffer(8);",
+    "  const av = __bake_c_new_view(a);",
+    "  const alias = __bake_c_new_view(a);",
+    "  const bv = __bake_c_new_view(b);",
+    "  __bake_c_view_set_u32(av, 0, 17, true);",
+    "  __bake_c_view_set_u32(bv, 0, 29, true);",
+    "  return __bake_c_view_get_u32(alias, 0, true) * 100 + __bake_c_view_get_u32(bv, 0, true);",
+    "}"
+  ].join("\n");
+  const { root, manifestPath, out } = project({ "buffer.ts": source });
+  try {
+    compile({ manifestPath, outputPath: out });
+    const generated = fs.readFileSync(out, "utf8");
+    assert.match(generated, /struct __bake_c_Buffer \{\s*uint64_t handle;\s*double byteLength;/);
+    const harness = out + ".harness.c", executable = out + ".harness";
+    fs.writeFileSync(harness, generated + [
+      "",
+      "static uint32_t slots[2]; static uint64_t next;",
+      "__bake_c_Buffer __bake_c_new_buffer(double size) { return (__bake_c_Buffer){ .handle = ++next, .byteLength = size }; }",
+      "__bake_c_View __bake_c_new_view(__bake_c_Buffer buffer) { return (__bake_c_View){ .buffer = buffer }; }",
+      "void __bake_c_view_set_u32(__bake_c_View view, double at, double value, bool le) { slots[view.buffer.handle - 1] = (uint32_t)value; }",
+      "double __bake_c_view_get_u32(__bake_c_View view, double at, bool le) { return slots[view.buffer.handle - 1]; }",
+      "int main(void) { return croissant_buffer_ts__exercise() == 1729 ? 0 : 1; }"
+    ].join("\n"));
+    const built = spawnSync("clang", ["-std=c11", "-Werror", harness, "-o", executable], { encoding: "utf8" });
+    if ((built.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return;
+    assert.equal(built.status, 0, built.stderr);
+    const ran = spawnSync(executable, [], { encoding: "utf8" });
+    assert.equal(ran.status, 0, ran.stderr);
+  } finally {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("unsigned right shift uses JavaScript ToUint32 semantics", () => {
+  const { root, manifestPath, out } = project({
+    "shift.ts": "export function shift(value: number, count: number): number { return value >>> count; }"
+  });
+  try {
+    compile({ manifestPath, outputPath: out });
+    const output = fs.readFileSync(out, "utf8");
+    assert.match(output, /return croissant_js_ushr\(value, count\);/);
+  } finally {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("mixed signed and unsigned 32-bit arguments preserve their numeric value", () => {
+  const source = [
+    "export type I32 = number;",
+    "export type U32 = number;",
+    "export type I64 = bigint;",
+    "declare function __bake_c_bigint(value: number): bigint;",
+    "export function word(value: I32 | U32): I64 { return __bake_c_bigint(value); }",
+    "export function relative(pc: bigint, offset: I32): I64 { return pc + word(offset); }",
+    "export function unsignedWord(value: U32): I64 { return word(value); }"
+  ].join("\n");
+  const { root, manifestPath, out } = project({ "signed.ts": source });
+  try {
+    compile({ manifestPath, outputPath: out });
+    const generated = fs.readFileSync(out, "utf8");
+    assert.match(generated, /int64_t croissant_signed_ts__word\(int64_t value\)/);
+    const harness = out + ".harness.c";
+    const executable = out + ".harness";
+    fs.writeFileSync(harness, generated + [
+      "",
+      "uint64_t __bake_c_bigint(double x) { return x < 0 ? (uint64_t)(int64_t)x : (uint64_t)x; }",
+      "int main(void) {",
+      "  if (croissant_signed_ts__word(-1) != -1) return 1;",
+      "  if (croissant_signed_ts__word(INT32_MIN) != INT32_MIN) return 2;",
+      "  if (croissant_signed_ts__unsignedWord(UINT32_MAX) != INT64_C(4294967295)) return 3;",
+      "  if (croissant_signed_ts__relative(UINT64_C(0x2001a2), -76) != INT64_C(0x200156)) return 4;",
+      "  return 0;",
+      "}"
+    ].join("\n"));
+    const built = spawnSync("clang", ["-std=c11", "-O1", harness, "-o", executable], { encoding: "utf8" });
+    if (built.error && (built.error as NodeJS.ErrnoException).code === "ENOENT") return;
+    assert.equal(built.status, 0, built.stderr);
+    const executed = spawnSync(executable, [], { encoding: "utf8" });
+    assert.equal(executed.status, 0, executed.stderr);
+  } finally {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
+});
