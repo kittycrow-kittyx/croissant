@@ -1,82 +1,66 @@
 # Croissant
 
-**CROISSANT**: Croissant Recursively Optimises Intermediate Sources, Synthesising Architecture-Neutral Translations.
+**CROISSANT**: Croissant Recursively Optimises Intermediate Sources,
+Synthesising Architecture-Neutral Translations.
 
-Croissant compiles `Bake --target=clang` TypeScript into **freestanding C**. It is implemented in TypeScript and preserves Thistle as the canonical source of kernel behaviour.
+Croissant compiles freestanding TypeScript emitted by Bake's `clang` target
+into C. It consumes `bake-manifest.json` and resolves symbols across modules.
 
 ## Build and test
 
 ```sh
 npm install
+npm run build
 npm run check
 npm test
 ```
 
-Croissant consumes `bake-manifest.json`, resolves cross-module symbols and generates a **modular C project**. One TypeScript implementation module produces one `.c` file and one `.h` header, with separate shared type, intrinsic, global and aggregator headers. A CMake project and provenance manifest are also generated.
+## Compile
+
+Prepare a TypeScript project with Bake's `--target=clang` option, then pass
+its emitted manifest to Croissant:
 
 ```sh
-node dist/src/cli.js --manifest /path/to/bake-clang/bake-manifest.json --out-dir build/rei
-cmake -S build/rei -B build/rei-objects
-cmake --build build/rei-objects -j
+node dist/src/cli.js --manifest /path/to/bake-output/bake-manifest.json \
+  --out-dir build/native
+cmake -S build/native -B build/native-objects
+cmake --build build/native-objects --parallel 2
 ```
 
-Output structure:
+The output includes one C source and header per input module, shared type,
+intrinsic and global headers, a CMake project and `croissant.manifest.json`.
+`--out FILE` selects the legacy single-file emitter instead of `--out-dir`.
 
-```text
-build/rei/
-├── include/croissant/
-│   ├── types.h
-│   ├── intrinsics.h
-│   ├── globals.h
-│   ├── all.h
-│   ├── core/*.h
-│   ├── native/*.h
-│   └── vm/*.h
-├── src/
-│   ├── globals.c
-│   ├── core/*.c
-│   ├── native/*.c
-│   └── vm/*.c
-├── CMakeLists.txt
-└── croissant.manifest.json
-```
+The input manifest must declare the `clang` backend and freestanding output.
+The compiler accepts native intrinsic ABI 1. Unsupported operations produce
+source-located `CRxxx` diagnostics. Directory output is staged before
+publication.
 
-Every generated C source is independently compiled and can be rebuilt without regenerating unrelated source files. Missing or unsupported operations cause a source-located `CRxxx` error before the source tree is published. Output publication uses a staging directory, and a failed compilation preserves previously published output.
+The generated C declares external `__bake_c_*` and numeric intrinsics. The
+consumer supplies these implementations before linking the generated objects.
 
-The legacy `--out build/rei.c` mode still emits a monolithic C file for compatibility. **New builds should use `--out-dir`.**
+## Native representation
 
-## Canonical Thistle pipeline
+Generated `__bake_c_Buffer` records contain a 64-bit opaque allocation
+handle and `byteLength`. Views share the handle rather than copying the
+backing storage. The platform resolves handles and validates bounds.
+Separate allocations require distinct identities, even when their
+lengths match.
 
-With sibling checkouts named `thistle/`, `bake/` and `croissant/`:
+Unsigned right shifts use the numeric intrinsic to preserve
+JavaScript's unsigned coercion semantics, including negative
+`Math.imul` results.
 
-```sh
-npm install --prefix croissant
-npm install --prefix bake
-npm run build --prefix croissant
-node croissant/dist/src/thistle-project.js thistle
-(cd bake && bun src/cli.ts --project ../thistle/tsconfig.croissant.json --out-dir build/croissant-bake --target=clang --engine=host)
-node croissant/dist/src/cli.js --manifest thistle/build/croissant-bake/bake-manifest.json --out-dir croissant/build/rei
-cmake -S croissant/build/rei -B croissant/build/rei-objects
-cmake --build croissant/build/rei-objects -j
-```
+Generated objects and platform implementations must use compatible
+buffer layouts.
 
-GitHub Actions also builds every C translation unit individually for **x86-64 and AArch64** using freestanding Clang, and runs a linked native multi-module smoke test. Bake's default WASM/Baguette lowering remains unchanged.
+## Integration fixture
 
-## Relationship to Rei
+`src/thistle-project.ts` prepares a Thistle native-source project for the
+compiler's integration checks. This helper is not required to compile other
+projects. CI compiles generated translation units for x86-64 and AArch64 and
+runs a linked native fixture.
 
-Like Teto, Rei should own its build orchestration and target integration, not a maintained fork of the Thistle kernel. Rei can pin a Thistle revision, invoke Bake and Croissant, then combine these generated modules with its native platform implementations, architecture boot code and linker scripts.
+## Licence
 
-Croissant's generated native objects currently retain unresolved `__bake_c_*` and numeric intrinsics. A successful compilation is **not** a linked, bootable Rei kernel or proof of complete semantic equivalence. Those require native implementations and further runtime validation.
-
-### Native allocation identity
-
-Generated `__bake_c_Buffer` records carry a 64-bit opaque `handle` and
-`byteLength`, matching the allocation-identity model in Crust. Views copy
-the handle, not the backing storage. The platform resolves the handle and
-validates bounds; equal-length allocations must remain distinct. Rebuild
-all generated objects and their platform implementations together after
-this layout change. The Bake source-intrinsic contract is unchanged.
-
-Unsigned right shifts use the native JavaScript numeric intrinsic rather than
-an unchecked conversion from a negative floating-point value to uint32_t.
-This preserves the signed Math.imul result before the source's >>> 0 coercion.
+[MIT](LICENSE).
