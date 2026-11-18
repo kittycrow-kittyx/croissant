@@ -45,6 +45,7 @@ function nativeIndex(member: ts.IndexSignatureDeclaration): boolean {
 }
 
 function loadProgram(root: string, sourcesListed: readonly string[]): { program: ts.Program; files: string[] } {
+  // Resolve every manifest entry within the input root before loading the program; reject TypeScript errors before native emission.
   const files = sourcesListed.map(relative => {
     const abs = path.resolve(root, relative);
     const local = path.relative(root, abs);
@@ -102,7 +103,9 @@ export function compile(request: CompileRequest): CompileResult {
     ctx.register(statement.name, name);
     if (!structs.some(entry => entry.name === name)) structs.push({ name, declaration: statement });
   };
-  const registerFunction = (source: ts.SourceFile, statement: ts.FunctionDeclaration, id: ts.Identifier): void => {
+  const registerFunction = (source: ts.SourceFile, statement: ts.FunctionDeclaration): void => {
+    const id = statement.name ?? null;
+    if (!id) ctx.fail(statement, "CR303", "anonymous function declaration");
     const name = id.text.startsWith("__bake_c_") ? id.text : ctx.module(source) + "__" + id.text;
     ctx.register(id, name);
     const intrinsic = name.startsWith("__bake_c_");
@@ -122,11 +125,7 @@ export function compile(request: CompileRequest): CompileResult {
   for (const source of sourceFiles) {
     for (const statement of source.statements) {
       if (ts.isInterfaceDeclaration(statement)) { registerInterface(source, statement); continue; }
-      if (ts.isFunctionDeclaration(statement)) {
-        const name = statement.name ?? null;
-        if (!name) ctx.fail(statement, "CR303", "anonymous function declaration");
-        registerFunction(source, statement, name); continue;
-      }
+      if (ts.isFunctionDeclaration(statement)) { registerFunction(source, statement); continue; }
       if (ts.isVariableStatement(statement)) { registerGlobals(source, statement); continue; }
       if (ts.isTypeAliasDeclaration(statement) || ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement) || ts.isEmptyStatement(statement)) continue;
       ctx.fail(statement, "CR303", "unsupported module declaration " + ts.SyntaxKind[statement.kind]);

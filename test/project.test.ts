@@ -107,8 +107,8 @@ test("modular output leaves previously published tree untouched when compilation
   }
 });
 
-function missingCommand(error: Error | null): boolean {
-  return error !== null && "code" in error && error.code === "ENOENT";
+function missingCommand(error: NodeJS.ErrnoException | null): boolean {
+  return error !== null && (error.code ?? null) === "ENOENT";
 }
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };

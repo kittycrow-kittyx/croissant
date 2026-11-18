@@ -78,7 +78,7 @@ export class Emitter {
     const args = node.arguments.map(a => f(a));
     const checker = this.ctx.program.getTypeChecker();
     const signature = checker.getResolvedSignature(node) ?? null;
-    const decl = signature ? signature.declaration : null;
+    const decl = signature ? signature.declaration ?? null : null;
     if (decl && "parameters" in decl) this.appendDefaults(node, args, decl.parameters);
     return f(node.expression) + "(" + args.join(", ") + ")";
   }

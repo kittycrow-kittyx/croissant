@@ -200,6 +200,6 @@ test("mixed signed and unsigned 32-bit arguments preserve their numeric value", 
   }
 });
 
-function missingCommand(error: Error | null): boolean {
-  return error !== null && "code" in error && error.code === "ENOENT";
+function missingCommand(error: NodeJS.ErrnoException | null): boolean {
+  return error !== null && (error.code ?? null) === "ENOENT";
 }
