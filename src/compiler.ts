@@ -39,12 +39,7 @@ const header = [
   ""
 ].join("\n");
 
-export function compile(request: CompileRequest): CompileResult {
-  if (Boolean(request.outputPath) === Boolean(request.outputDir))
-    throw new Error("CR000: specify exactly one of --out or --out-dir");
-  const manifestPath = path.resolve(request.manifestPath);
-  const root = path.dirname(manifestPath);
-  const sourcesListed = readManifest(fs.readFileSync(manifestPath, "utf8"));
+function loadProgram(root: string, sourcesListed: readonly string[]): { program: ts.Program; files: string[] } {
   const files = sourcesListed.map(relative => {
     const abs = path.resolve(root, relative);
     const local = path.relative(root, abs);
@@ -73,7 +68,16 @@ export function compile(request: CompileRequest): CompileResult {
     throw new Error("CR006: Bake output failed TypeScript checking (" + diagnostics.length + " errors). " +
       path.relative(root, file) + ":" + at + ": " + ts.flattenDiagnosticMessageText(d.messageText, " "));
   }
+  return { program, files };
+}
 
+export function compile(request: CompileRequest): CompileResult {
+  if (Boolean(request.outputPath) === Boolean(request.outputDir))
+    throw new Error("CR000: specify exactly one of --out or --out-dir");
+  const manifestPath = path.resolve(request.manifestPath);
+  const root = path.dirname(manifestPath);
+  const sourcesListed = readManifest(fs.readFileSync(manifestPath, "utf8"));
+  const { program, files } = loadProgram(root, sourcesListed);
   const ctx: Context = new Context(program, root);
   const sourceFiles = files.map(file => {
     const source = program.getSourceFile(file);
