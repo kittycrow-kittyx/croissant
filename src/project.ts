@@ -104,7 +104,7 @@ export function emitProject(input: ProjectInputs): ProjectResult {
         " " + item.name + ";"), "",
       "void croissant_init_globals(void) {",
       ...globals.map(item => {
-        const initial = item.declaration.initializer;
+        const initial = item.declaration.initializer ?? null;
         if (!initial) return context.fail(item.declaration, "CR308", "uninitialised top-level native variable");
         return "  " + item.name + " = " +
           emitter.expression(initial, context.type(item.declaration.type ?? null, item.declaration.name)) + ";";
@@ -113,7 +113,7 @@ export function emitProject(input: ProjectInputs): ProjectResult {
     write(scratch, "src/globals.c", initialisations.join("\n"), output);
     for (const item of modules) {
       const definitions = ownFunctions(item.source).map(entry => {
-        if (!entry.declaration.body)
+        if (!(entry.declaration.body ?? null))
           context.fail(entry.declaration, "CR309", "missing native function body");
         return emitter.function(entry.declaration, entry.name);
       });
@@ -147,11 +147,12 @@ export function emitProject(input: ProjectInputs): ProjectResult {
         ...modules.map(item => "include/croissant/" + item.module + ".h")]
     }, null, 2), output);
     if (fs.existsSync(destination)) fs.renameSync(destination, backup);
+    let published = false;
     try {
       fs.renameSync(scratch, destination);
-    } catch (error) {
-      if (fs.existsSync(backup)) fs.renameSync(backup, destination);
-      throw error;
+      published = true;
+    } finally {
+      if (!published && fs.existsSync(backup)) fs.renameSync(backup, destination);
     }
     fs.rmSync(backup, { recursive: true, force: true });
     return { directory: destination, generatedFiles: output };

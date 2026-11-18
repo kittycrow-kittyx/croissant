@@ -57,7 +57,7 @@ test("compiles typed Bake subset to freestanding C for two architectures", () =>
       "--target=x86_64-unknown-none-elf", "-std=c11", "-ffreestanding",
       "-Werror", "-fsyntax-only", out
     ], { encoding: "utf8" });
-    if (clang.error && (clang.error as NodeJS.ErrnoException).code === "ENOENT") return;
+    if (missingCommand(clang.error ?? null)) return;
     assert.equal(clang.status, 0, clang.stderr);
     const harness = out + ".harness.c";
     const executable = out + ".harness";
@@ -140,7 +140,7 @@ test("native buffer aliases retain identity even for equal-length allocations", 
       "int main(void) { return croissant_buffer_ts__exercise() == 1729 ? 0 : 1; }"
     ].join("\n"));
     const built = spawnSync("clang", ["-std=c11", "-Werror", harness, "-o", executable], { encoding: "utf8" });
-    if ((built.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return;
+    if (missingCommand(built.error ?? null)) return;
     assert.equal(built.status, 0, built.stderr);
     const ran = spawnSync(executable, [], { encoding: "utf8" });
     assert.equal(ran.status, 0, ran.stderr);
@@ -191,7 +191,7 @@ test("mixed signed and unsigned 32-bit arguments preserve their numeric value", 
       "}"
     ].join("\n"));
     const built = spawnSync("clang", ["-std=c11", "-O1", harness, "-o", executable], { encoding: "utf8" });
-    if (built.error && (built.error as NodeJS.ErrnoException).code === "ENOENT") return;
+    if (missingCommand(built.error ?? null)) return;
     assert.equal(built.status, 0, built.stderr);
     const executed = spawnSync(executable, [], { encoding: "utf8" });
     assert.equal(executed.status, 0, executed.stderr);
@@ -199,3 +199,7 @@ test("mixed signed and unsigned 32-bit arguments preserve their numeric value", 
     fs.rmSync(root, { force: true, recursive: true });
   }
 });
+
+function missingCommand(error: Error | null): boolean {
+  return error !== null && "code" in error && error.code === "ENOENT";
+}

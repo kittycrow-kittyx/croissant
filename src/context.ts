@@ -53,7 +53,7 @@ export class Context {
   ident(name: ts.Identifier): string {
     if (name.text.startsWith("__bake_c_")) return name.text;
     const checker = this.program.getTypeChecker();
-    let symbol = checker.getSymbolAtLocation(name);
+    let symbol = checker.getSymbolAtLocation(name) ?? null;
     if (symbol && (symbol.flags & ts.SymbolFlags.Alias)) {
       symbol = checker.getAliasedSymbol(symbol);
     }
@@ -62,47 +62,48 @@ export class Context {
 
   register(name: ts.Identifier, cName: string): void {
     const checker = this.program.getTypeChecker();
-    const symbol = checker.getSymbolAtLocation(name);
-    if (symbol && this.symbols.has(symbol) && this.symbols.get(symbol) !== cName) {
+    const symbol = checker.getSymbolAtLocation(name) ?? null;
+    if (symbol && this.symbols.has(symbol) && (this.symbols.get(symbol) ?? null) !== cName) {
       this.fail(name, "CR101", "symbol collision: " + name.text);
     }
     if (symbol) this.symbols.set(symbol, cName);
   }
 
-  private inferType(origin?: ts.Node): string {
-    const node = origin ?? this.program.getSourceFiles()[0];
+  private inferType(origin: ts.Node | null = null): string {
+    const node = origin ?? (this.program.getSourceFiles()[0] ?? null);
     if (!node) throw new CompilerError("CR102", "<project>", 1, "unresolved C type: no source files");
     const type = origin ? this.program.getTypeChecker().getTypeAtLocation(origin) : null;
-    const alias = type?.aliasSymbol?.getName();
+    const aliasSymbol = type ? type.aliasSymbol ?? null : null;
+    const alias = aliasSymbol ? aliasSymbol.getName() : null;
     const scalar = alias ? SCALARS[alias] ?? null : null;
     if (scalar) return scalar;
-    const flags = type?.flags ?? 0;
+    const flags = type ? type.flags : 0;
     if (flags & ts.TypeFlags.BooleanLike) return "bool";
     if (flags & ts.TypeFlags.BigIntLike) return "uint64_t";
     if (flags & ts.TypeFlags.NumberLike) return "double";
     if (flags & ts.TypeFlags.Void) return "void";
     if (flags & ts.TypeFlags.StringLike) return "const char *";
-    const symbol = type?.symbol;
-    const registered = symbol ? this.symbols.get(symbol) : undefined;
+    const symbol = type ? type.symbol : null;
+    const registered = symbol ? this.symbols.get(symbol) ?? null : null;
     return registered ?? this.fail(node, "CR102", "unresolved C type: add a static TypeScript annotation");
   }
 
   private namedType(node: ts.TypeReferenceNode): string {
     if (!ts.isIdentifier(node.typeName)) return this.fail(node, "CR103", "qualified type references are unsupported");
     const name = node.typeName.text;
-    const scalar = SCALARS[name];
+    const scalar = SCALARS[name] ?? null;
     if (scalar) return scalar;
     if (name === "ArrayBufferLike" || name === "ArrayBuffer" || name === "SharedArrayBuffer") return "__bake_c_Buffer";
     const checker = this.program.getTypeChecker();
-    let symbol = checker.getSymbolAtLocation(node.typeName);
+    let symbol = checker.getSymbolAtLocation(node.typeName) ?? null;
     if (symbol && (symbol.flags & ts.SymbolFlags.Alias)) symbol = checker.getAliasedSymbol(symbol);
-    const registered = symbol ? this.symbols.get(symbol) : undefined;
+    const registered = symbol ? this.symbols.get(symbol) ?? null : null;
     return registered ?? this.fail(node, "CR104", "unknown user-defined type " + name);
   }
 
-  private unionType(node: ts.UnionTypeNode, origin?: ts.Node): string {
+  private unionType(node: ts.UnionTypeNode, origin: ts.Node | null = null): string {
     const types = [...new Set(node.types.map(part => this.type(part, origin)))];
-    const first = types[0];
+    const first = types[0] ?? null;
     if (types.length === 1 && first) return first;
     if (!types.every(type => ["uint32_t", "int32_t", "uint64_t", "int64_t", "double", "float"].includes(type)))
       return this.fail(node, "CR105", "union requires a tagged C representation: " + types.join(" | "));
@@ -113,7 +114,7 @@ export class Context {
       types.includes("uint32_t") ? "uint32_t" : "int32_t";
   }
 
-  type(node: ts.TypeNode | null, origin?: ts.Node): string {
+  type(node: ts.TypeNode | null, origin: ts.Node | null = null): string {
     if (!node) return this.inferType(origin);
     if (ts.isParenthesizedTypeNode(node)) return this.type(node.type ?? null, origin);
     if (ts.isTypeReferenceNode(node)) return this.namedType(node);

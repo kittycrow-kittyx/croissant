@@ -6,11 +6,9 @@ import { CompilerError, Context, cIdentifier } from "./context.js";
 import { Emitter } from "./emitter.js";
 import { emitProject } from "./project.js";
 
-export interface CompileRequest {
-  readonly manifestPath: string;
-  readonly outputPath?: string;
-  readonly outputDir?: string;
-}
+export type CompileRequest = { readonly manifestPath: string } & (
+  { readonly outputPath: string } | { readonly outputDir: string }
+);
 
 export interface CompileResult {
   readonly files: number;
@@ -18,7 +16,7 @@ export interface CompileResult {
   readonly globals: number;
   readonly interfaces: number;
   readonly outputPath: string;
-  readonly generatedFiles?: readonly string[];
+  readonly generatedFiles: readonly string[];
 }
 
 const header = [
@@ -38,6 +36,13 @@ const header = [
   "extern double croissant_js_remainder(double, double);",
   ""
 ].join("\n");
+
+function nativeIndex(member: ts.IndexSignatureDeclaration): boolean {
+  const parameter = member.parameters[0] ?? null;
+  const key = parameter ? parameter.type ?? null : null;
+  return member.parameters.length === 1 && key !== null && key.kind === ts.SyntaxKind.NumberKeyword &&
+    [ts.SyntaxKind.NumberKeyword, ts.SyntaxKind.BigIntKeyword].includes(member.type.kind);
+}
 
 function loadProgram(root: string, sourcesListed: readonly string[]): { program: ts.Program; files: string[] } {
   const files = sourcesListed.map(relative => {
@@ -61,10 +66,12 @@ function loadProgram(root: string, sourcesListed: readonly string[]): { program:
     noEmit: true
   });
   const diagnostics = ts.getPreEmitDiagnostics(program).filter(d => d.category === ts.DiagnosticCategory.Error);
-  const d = diagnostics[0];
+  const d = diagnostics[0] ?? null;
   if (d) {
-    const file = d.file?.fileName ?? "<typescript>";
-    const at = d.file && d.start != null ? d.file.getLineAndCharacterOfPosition(d.start).line + 1 : 0;
+    const source = d.file ?? null;
+    const offset = d.start ?? null;
+    const file = source ? source.fileName : "<typescript>";
+    const at = source && offset !== null ? source.getLineAndCharacterOfPosition(offset).line + 1 : 0;
     throw new Error("CR006: Bake output failed TypeScript checking (" + diagnostics.length + " errors). " +
       path.relative(root, file) + ":" + at + ": " + ts.flattenDiagnosticMessageText(d.messageText, " "));
   }
@@ -72,7 +79,7 @@ function loadProgram(root: string, sourcesListed: readonly string[]): { program:
 }
 
 export function compile(request: CompileRequest): CompileResult {
-  if (Boolean(request.outputPath) === Boolean(request.outputDir))
+  if (("outputPath" in request) === ("outputDir" in request))
     throw new Error("CR000: specify exactly one of --out or --out-dir");
   const manifestPath = path.resolve(request.manifestPath);
   const root = path.dirname(manifestPath);
@@ -80,7 +87,7 @@ export function compile(request: CompileRequest): CompileResult {
   const { program, files } = loadProgram(root, sourcesListed);
   const ctx: Context = new Context(program, root);
   const sourceFiles = files.map(file => {
-    const source = program.getSourceFile(file);
+    const source = program.getSourceFile(file) ?? null;
     if (!source) throw new Error("CR005: manifest source not loaded: " + file);
     return source;
   });
@@ -99,7 +106,7 @@ export function compile(request: CompileRequest): CompileResult {
     const name = id.text.startsWith("__bake_c_") ? id.text : ctx.module(source) + "__" + id.text;
     ctx.register(id, name);
     const intrinsic = name.startsWith("__bake_c_");
-    if (intrinsic && statement.body) ctx.fail(statement, "CR301", "compiler intrinsic must be external");
+    if (intrinsic && (statement.body ?? null)) ctx.fail(statement, "CR301", "compiler intrinsic must be external");
     if (!intrinsic) { functions.push({ name, declaration: statement }); return; }
     if (!externals.has(name)) externals.set(name, statement);
   };
@@ -115,7 +122,11 @@ export function compile(request: CompileRequest): CompileResult {
   for (const source of sourceFiles) {
     for (const statement of source.statements) {
       if (ts.isInterfaceDeclaration(statement)) { registerInterface(source, statement); continue; }
-      if (ts.isFunctionDeclaration(statement) && statement.name) { registerFunction(source, statement, statement.name); continue; }
+      if (ts.isFunctionDeclaration(statement)) {
+        const name = statement.name ?? null;
+        if (!name) ctx.fail(statement, "CR303", "anonymous function declaration");
+        registerFunction(source, statement, name); continue;
+      }
       if (ts.isVariableStatement(statement)) { registerGlobals(source, statement); continue; }
       if (ts.isTypeAliasDeclaration(statement) || ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement) || ts.isEmptyStatement(statement)) continue;
       ctx.fail(statement, "CR303", "unsupported module declaration " + ts.SyntaxKind[statement.kind]);
@@ -139,15 +150,12 @@ export function compile(request: CompileRequest): CompileResult {
     if (++rounds > structs.length + 1) throw new Error("CR304: cyclic or incomplete native record layout");
     let advanced = false;
     for (let i = pending.length - 1; i >= 0; i--) {
-      const item = pending[i];
+      const item = pending[i] ?? null;
       if (!item) throw new Error("CR304: missing pending record");
       const properties = item.declaration.members.filter(ts.isPropertySignature);
       for (const member of item.declaration.members) {
         if (ts.isPropertySignature(member)) continue;
-        if (ts.isIndexSignatureDeclaration(member) &&
-            member.parameters.length === 1 &&
-            member.parameters[0]?.type?.kind === ts.SyntaxKind.NumberKeyword &&
-            member.type && [ts.SyntaxKind.NumberKeyword, ts.SyntaxKind.BigIntKeyword].includes(member.type.kind)) {
+        if (ts.isIndexSignatureDeclaration(member) && nativeIndex(member)) {
           // Element access must already be lowered to bounds-checked intrinsics.
           continue;
         }
@@ -199,17 +207,17 @@ export function compile(request: CompileRequest): CompileResult {
   text.push("void croissant_init_globals(void) {");
   for (const item of globals) {
     const type = ctx.type(item.declaration.type ?? null, item.declaration.name);
-    const initializer = item.declaration.initializer;
+    const initializer = item.declaration.initializer ?? null;
     if (!initializer) return ctx.fail(item.declaration, "CR308", "uninitialised top-level native variable");
     text.push("  " + item.name + " = " + emitter.expression(initializer, type) + ";");
   }
   text.push("}", "");
   for (const item of functions) {
-    if (!item.declaration.body) ctx.fail(item.declaration, "CR309", "missing native function body");
+    if (!(item.declaration.body ?? null)) ctx.fail(item.declaration, "CR309", "missing native function body");
     text.push(emitter.function(item.declaration, item.name));
   }
 
-  if (request.outputDir) {
+  if ("outputDir" in request) {
     const project = emitProject({
       destination: request.outputDir, context: ctx, emitter,
       sources: sourceFiles, types: typeDefinitions, intrinsics: externals,
@@ -222,7 +230,7 @@ export function compile(request: CompileRequest): CompileResult {
     };
   }
 
-  if (!request.outputPath) throw new Error("CR000: missing output path");
+  if (!("outputPath" in request) || !request.outputPath) throw new Error("CR000: missing output path");
   const outputPath = path.resolve(request.outputPath);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   // Atomic publication ensures a failed compiler cannot leave a partial C file.
@@ -234,7 +242,7 @@ export function compile(request: CompileRequest): CompileResult {
     if (fs.existsSync(temp)) fs.rmSync(temp, { force: true });
   }
   return { files: files.length, functions: functions.length, globals: globals.length,
-    interfaces: structs.length, outputPath };
+    interfaces: structs.length, outputPath, generatedFiles: [] };
 }
 
 export { CompilerError };

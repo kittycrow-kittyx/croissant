@@ -43,7 +43,7 @@ test("modular project has separate modules, usable headers and linkable objects"
   try {
     const result = compile({ manifestPath: manifest, outputDir: output });
     assert.equal(result.files, 2);
-    assert.ok((result.generatedFiles?.length ?? 0) >= 11);
+    assert.ok((result.generatedFiles.length) >= 11);
     const paths = [
       "src/core/arithmetic.c", "src/native/kernel.c", "src/globals.c",
       "include/croissant/core/arithmetic.h", "include/croissant/native/kernel.h",
@@ -58,9 +58,7 @@ test("modular project has separate modules, usable headers and linkable objects"
     assert.match(native, /croissant_native_kernel_ts__step/);
     assert.doesNotMatch(arithmetic, /croissant_native_kernel_ts__step/);
     assert.match(arithmetic, /croissant_core_arithmetic_ts__sum/);
-    const projects = JSON.parse(fs.readFileSync(path.join(output, "croissant.manifest.json"), "utf8")) as {
-      modules: { source: string; header: string }[];
-    };
+    const projects = readProject(fs.readFileSync(path.join(output, "croissant.manifest.json"), "utf8"));
     assert.equal(projects.modules.length, 2);
     for (const mod of projects.modules) {
       assert.ok(fs.existsSync(path.join(output, mod.source)));
@@ -83,7 +81,7 @@ test("modular project has separate modules, usable headers and linkable objects"
       "-std=c11", "-O1", "-Wall", "-Werror", "-I" + path.join(output, "include"),
       ...sources, harness, "-o", executable
     ], { encoding: "utf8" });
-    if (clang.error && (clang.error as NodeJS.ErrnoException).code === "ENOENT") return;
+    if (missingCommand(clang.error ?? null)) return;
     assert.equal(clang.status, 0, clang.stderr);
     const run = spawnSync(executable, [], { encoding: "utf8" });
     assert.equal(run.status, 0, run.stderr);
@@ -108,3 +106,23 @@ test("modular output leaves previously published tree untouched when compilation
     fs.rmSync(output, { recursive: true, force: true });
   }
 });
+
+function missingCommand(error: Error | null): boolean {
+  return error !== null && "code" in error && error.code === "ENOENT";
+}
+
+type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
+const decode: (text: string) => Json = JSON.parse;
+function readProject(text: string): { modules: { source: string; header: string }[] } {
+  const value = decode(text);
+  assert.ok(value && typeof value === "object" && !Array.isArray(value));
+  const modules = value.modules ?? null;
+  assert.ok(Array.isArray(modules));
+  return { modules: modules.map((entry: Json) => {
+    assert.ok(entry && typeof entry === "object" && !Array.isArray(entry));
+    const source = entry.source ?? null, header = entry.header ?? null;
+    assert.equal(typeof source, "string"); assert.equal(typeof header, "string");
+    if (typeof source !== "string" || typeof header !== "string") throw new Error("Invalid module manifest");
+    return { source, header };
+  }) };
+}

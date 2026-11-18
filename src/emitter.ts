@@ -4,7 +4,7 @@ import { Context, cIdentifier } from "./context.js";
 const indent = (depth: number): string => "  ".repeat(depth);
 const condition = (value: string): string => value.startsWith("(") && value.endsWith(")") ? value : "(" + value + ")";
 const op = (kind: ts.SyntaxKind): string => {
-  const name = ts.tokenToString(kind);
+  const name = ts.tokenToString(kind) ?? null;
   if (!name) throw new Error("Unknown operator: " + ts.SyntaxKind[kind]);
   if (name === "===") return "==";
   if (name === "!==") return "!=";
@@ -22,7 +22,7 @@ export class Emitter {
 
   private binary(node: ts.BinaryExpression): string {
     // JavaScript bitwise operations coerce to i32, unlike ordinary floating-point arithmetic.
-    const f = (expr: ts.Expression, type?: string): string => this.expression(expr, type);
+    const f = (expr: ts.Expression, type: string | null = null): string => this.expression(expr, type);
     const kind = node.operatorToken.kind;
     if (kind === ts.SyntaxKind.AsteriskAsteriskToken) {
       return this.ctx.fail(node, "CR203", "exponentiation needs a typed intrinsic");
@@ -48,7 +48,7 @@ export class Emitter {
   }
 
   private prefix(node: ts.PrefixUnaryExpression): string {
-    const f = (expr: ts.Expression, type?: string): string => this.expression(expr, type);
+    const f = (expr: ts.Expression, type: string | null = null): string => this.expression(expr, type);
     const operator = op(node.operator);
     if (node.operator === ts.SyntaxKind.MinusToken && ts.isBigIntLiteral(node.operand)) {
       const literal = node.operand.text.slice(0, -1).replaceAll("_", "");
@@ -65,19 +65,20 @@ export class Emitter {
   private appendDefaults(node: ts.CallExpression, args: string[], parameters: readonly (ts.ParameterDeclaration | ts.JSDocParameterTag)[]): void {
     for (const parameter of parameters.slice(args.length)) {
       if (!ts.isParameter(parameter)) this.ctx.fail(node, "CR209", "JSDoc parameter requires a typed declaration");
-      if (parameter.initializer) { args.push(this.expression(parameter.initializer)); continue; }
-      if (parameter.questionToken) this.ctx.fail(node, "CR207", "optional arguments need an explicit C sentinel");
+      const initial = parameter.initializer ?? null;
+      if (initial) { args.push(this.expression(initial)); continue; }
+      if (parameter.questionToken ?? null) this.ctx.fail(node, "CR207", "optional arguments need an explicit C sentinel");
       this.ctx.fail(node, "CR208", "missing required argument");
     }
   }
 
   private call(node: ts.CallExpression): string {
-    const f = (expr: ts.Expression, type?: string): string => this.expression(expr, type);
-    if (node.typeArguments?.length) return this.ctx.fail(node, "CR206", "generic runtime function call");
+    const f = (expr: ts.Expression, type: string | null = null): string => this.expression(expr, type);
+    if ((node.typeArguments ?? []).length) return this.ctx.fail(node, "CR206", "generic runtime function call");
     const args = node.arguments.map(a => f(a));
     const checker = this.ctx.program.getTypeChecker();
-    const signature = checker.getResolvedSignature(node);
-    const decl = signature?.declaration;
+    const signature = checker.getResolvedSignature(node) ?? null;
+    const decl = signature ? signature.declaration : null;
     if (decl && "parameters" in decl) this.appendDefaults(node, args, decl.parameters);
     return f(node.expression) + "(" + args.join(", ") + ")";
   }
@@ -89,15 +90,15 @@ export class Emitter {
     return this.ctx.fail(property, "CR210", "unsupported object construction");
   }
 
-  private object(node: ts.ObjectLiteralExpression, expected?: string): string {
+  private object(node: ts.ObjectLiteralExpression, expected: string | null = null): string {
     const type = expected ?? this.ctx.type(null, node);
     const fields = node.properties.map(property => this.field(property));
     return "(" + type + "){ " + fields.join(", ") + " }";
   }
 
-  expression(node: ts.Expression, expected?: string): string {
+  expression(node: ts.Expression, expected: string | null = null): string {
     // Preserve explicit casts and literal widths; delegate compound expressions to their typed emitters.
-    const f = (expr: ts.Expression, type?: string): string => this.expression(expr, type);
+    const f = (expr: ts.Expression, type: string | null = null): string => this.expression(expr, type);
     if (ts.isIdentifier(node) && node.text === "undefined") return this.ctx.fail(node, "CR201", "undefined has no freestanding C value");
     if (ts.isIdentifier(node)) return this.ctx.ident(node);
     if (ts.isNumericLiteral(node)) return numericLiteral(node.text);
@@ -139,19 +140,20 @@ export class Emitter {
   }
 
   private forInitial(node: ts.ForStatement): string {
-    const init = node.initializer;
+    const init = node.initializer ?? null;
     if (!init) return "";
     if (!ts.isVariableDeclarationList(init)) return this.expression(init);
-    const decl = init.declarations[0];
+    const decl = init.declarations[0] ?? null;
     if (init.declarations.length !== 1 || !decl) return this.ctx.fail(node, "CR216", "multiple C for-loop declarations");
-    if (!ts.isIdentifier(decl.name) || !decl.initializer) return this.ctx.fail(decl, "CR217", "unsupported for-loop binding");
-    return this.ctx.type(decl.type ?? null, decl.name) + " " + decl.name.text + " = " + this.expression(decl.initializer);
+    const initial = decl.initializer ?? null;
+    if (!ts.isIdentifier(decl.name) || !initial) return this.ctx.fail(decl, "CR217", "unsupported for-loop binding");
+    return this.ctx.type(decl.type ?? null, decl.name) + " " + decl.name.text + " = " + this.expression(initial);
   }
 
   statement(node: ts.Statement, depth: number, returnType: string): string {
     // Scoped blocks preserve declaration visibility and avoid changing loop or branch lifetimes.
     const pre = indent(depth);
-    const f = (e: ts.Expression, expected?: string): string => this.expression(e, expected);
+    const f = (e: ts.Expression, expected: string | null = null): string => this.expression(e, expected);
     const s = (n: ts.Statement, level: number): string => this.statement(n, level, returnType);
     if (ts.isBlock(node)) {
       return "{\n" + node.statements.map(stmt => s(stmt, depth + 1)).join("") + pre + "}";
@@ -160,19 +162,22 @@ export class Emitter {
       return node.declarationList.declarations.map(decl => {
         if (!ts.isIdentifier(decl.name)) return this.ctx.fail(decl, "CR214", "destructuring survived Bake");
         const type = this.ctx.type(decl.type ?? null, decl.name);
-        if (!decl.initializer) return pre + type + " " + decl.name.text + ";\n";
-        return pre + type + " " + cIdentifier(decl.name.text) + " = " + f(decl.initializer, type) + ";\n";
+        const initial = decl.initializer ?? null;
+        if (!initial) return pre + type + " " + decl.name.text + ";\n";
+        return pre + type + " " + cIdentifier(decl.name.text) + " = " + f(initial, type) + ";\n";
       }).join("");
     }
     if (ts.isReturnStatement(node)) {
-      return pre + (node.expression ? "return " + f(node.expression, returnType) : "return") + ";\n";
+      const value = node.expression ?? null;
+      return pre + (value ? "return " + f(value, returnType) : "return") + ";\n";
     }
     if (ts.isIfStatement(node)) {
       const yes = ts.isBlock(node.thenStatement) ? s(node.thenStatement, depth) :
         "{\n" + s(node.thenStatement, depth + 1) + pre + "}";
-      const no = node.elseStatement
-        ? " else " + (ts.isBlock(node.elseStatement) ? s(node.elseStatement, depth) :
-            "{\n" + s(node.elseStatement, depth + 1) + pre + "}") : "";
+      const alternate = node.elseStatement ?? null;
+      const no = alternate
+        ? " else " + (ts.isBlock(alternate) ? s(alternate, depth) :
+            "{\n" + s(alternate, depth + 1) + pre + "}") : "";
       return pre + "if " + condition(f(node.expression)) + " " + yes + no + "\n";
     }
     if (ts.isWhileStatement(node)) {
@@ -186,8 +191,10 @@ export class Emitter {
     }
     if (ts.isForStatement(node)) {
       const initial = this.forInitial(node);
-      const cond = node.condition ? f(node.condition) : "true";
-      const step = node.incrementor ? f(node.incrementor) : "";
+      const conditionNode = node.condition ?? null;
+      const cond = conditionNode ? f(conditionNode) : "true";
+      const increment = node.incrementor ?? null;
+      const step = increment ? f(increment) : "";
       return pre + "for (" + initial + "; " + cond + "; " + step + ") " +
         (ts.isBlock(node.statement) ? s(node.statement, depth) :
           "{\n" + s(node.statement, depth + 1) + pre + "}") + "\n";
@@ -209,11 +216,11 @@ export class Emitter {
   }
 
   functionSignature(node: ts.FunctionDeclaration, name: string): string {
-    if (!node.name) return this.ctx.fail(node, "CR219", "anonymous top-level function");
-    if (node.typeParameters?.length) return this.ctx.fail(node, "CR220", "generic native function");
+    if (!(node.name ?? null)) return this.ctx.fail(node, "CR219", "anonymous top-level function");
+    if ((node.typeParameters ?? []).length) return this.ctx.fail(node, "CR220", "generic native function");
     const returns = this.ctx.type(node.type ?? null, node);
     const params = node.parameters.map(param => {
-      if (!ts.isIdentifier(param.name) || param.dotDotDotToken) {
+      if (!ts.isIdentifier(param.name) || (param.dotDotDotToken ?? null)) {
         return this.ctx.fail(param, "CR221", "unsupported native function parameter");
       }
       return this.ctx.type(param.type ?? null, param.name) + " " + cIdentifier(param.name.text);
@@ -223,7 +230,8 @@ export class Emitter {
 
   function(node: ts.FunctionDeclaration, name: string): string {
     const signature = this.functionSignature(node, name);
-    if (!node.body) return "";
-    return signature + " " + this.statement(node.body, 0, this.ctx.type(node.type ?? null, node)) + "\n\n";
+    const body = node.body ?? null;
+    if (!body) return "";
+    return signature + " " + this.statement(body, 0, this.ctx.type(node.type ?? null, node)) + "\n\n";
   }
 }
