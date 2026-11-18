@@ -6,3 +6,4 @@
 - [compiler](modules/compiler.md)
 - [cli](modules/cli.md)
 - [thistle-project](modules/thistle-project.md)
+- [Manifest reader](modules/manifest.md)

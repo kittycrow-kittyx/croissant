@@ -2,11 +2,11 @@
 import { compile, CompilerError } from "./compiler.js";
 
 const args = process.argv.slice(2);
-function option(name: string): string | undefined {
+function option(name: string): string | null {
   const exact = args.indexOf(name);
-  if (exact >= 0) return args[exact + 1];
+  if (exact >= 0) return args[exact + 1] ?? null;
   const prefix = args.find(arg => arg.startsWith(name + "="));
-  return prefix?.slice(name.length + 1);
+  return prefix?.slice(name.length + 1) ?? null;
 }
 if (args.includes("--help") || args.includes("-h")) {
   process.stdout.write("Croissant compiler\nUsage: croissant --manifest build/bake-clang/bake-manifest.json --out-dir build/rei\nLegacy: --out build/rei.c\n");

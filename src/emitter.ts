@@ -41,7 +41,7 @@ export class Emitter {
         [ts.SyntaxKind.GreaterThanGreaterThanToken]: "croissant_js_shr",
         [ts.SyntaxKind.PercentToken]: "croissant_js_remainder"
       };
-    const intrinsic = isBig ? undefined : nativeOp[kind];
+    const intrinsic = isBig ? null : nativeOp[kind] ?? null;
     if (intrinsic) return intrinsic + "(" + f(node.left) + ", " + f(node.right) + ")";
     if (kind === ts.SyntaxKind.CommaToken) return "(" + f(node.left) + ", " + f(node.right) + ")";
     return "(" + f(node.left) + " " + op(kind) + " " + f(node.right) + ")";
@@ -90,7 +90,7 @@ export class Emitter {
   }
 
   private object(node: ts.ObjectLiteralExpression, expected?: string): string {
-    const type = expected ?? this.ctx.type(undefined, node);
+    const type = expected ?? this.ctx.type(null, node);
     const fields = node.properties.map(property => this.field(property));
     return "(" + type + "){ " + fields.join(", ") + " }";
   }
@@ -145,7 +145,7 @@ export class Emitter {
     const decl = init.declarations[0];
     if (init.declarations.length !== 1 || !decl) return this.ctx.fail(node, "CR216", "multiple C for-loop declarations");
     if (!ts.isIdentifier(decl.name) || !decl.initializer) return this.ctx.fail(decl, "CR217", "unsupported for-loop binding");
-    return this.ctx.type(decl.type, decl.name) + " " + decl.name.text + " = " + this.expression(decl.initializer);
+    return this.ctx.type(decl.type ?? null, decl.name) + " " + decl.name.text + " = " + this.expression(decl.initializer);
   }
 
   statement(node: ts.Statement, depth: number, returnType: string): string {
@@ -159,7 +159,7 @@ export class Emitter {
     if (ts.isVariableStatement(node)) {
       return node.declarationList.declarations.map(decl => {
         if (!ts.isIdentifier(decl.name)) return this.ctx.fail(decl, "CR214", "destructuring survived Bake");
-        const type = this.ctx.type(decl.type, decl.name);
+        const type = this.ctx.type(decl.type ?? null, decl.name);
         if (!decl.initializer) return pre + type + " " + decl.name.text + ";\n";
         return pre + type + " " + cIdentifier(decl.name.text) + " = " + f(decl.initializer, type) + ";\n";
       }).join("");
@@ -211,12 +211,12 @@ export class Emitter {
   functionSignature(node: ts.FunctionDeclaration, name: string): string {
     if (!node.name) return this.ctx.fail(node, "CR219", "anonymous top-level function");
     if (node.typeParameters?.length) return this.ctx.fail(node, "CR220", "generic native function");
-    const returns = this.ctx.type(node.type, node);
+    const returns = this.ctx.type(node.type ?? null, node);
     const params = node.parameters.map(param => {
       if (!ts.isIdentifier(param.name) || param.dotDotDotToken) {
         return this.ctx.fail(param, "CR221", "unsupported native function parameter");
       }
-      return this.ctx.type(param.type, param.name) + " " + cIdentifier(param.name.text);
+      return this.ctx.type(param.type ?? null, param.name) + " " + cIdentifier(param.name.text);
     });
     return returns + " " + name + "(" + (params.length ? params.join(", ") : "void") + ")";
   }
@@ -224,6 +224,6 @@ export class Emitter {
   function(node: ts.FunctionDeclaration, name: string): string {
     const signature = this.functionSignature(node, name);
     if (!node.body) return "";
-    return signature + " " + this.statement(node.body, 0, this.ctx.type(node.type, node)) + "\n\n";
+    return signature + " " + this.statement(node.body, 0, this.ctx.type(node.type ?? null, node)) + "\n\n";
   }
 }

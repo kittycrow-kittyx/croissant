@@ -57,7 +57,7 @@ export class Context {
     if (symbol && (symbol.flags & ts.SymbolFlags.Alias)) {
       symbol = checker.getAliasedSymbol(symbol);
     }
-    return (symbol ? this.symbols.get(symbol) : undefined) ?? cIdentifier(name.text);
+    return (symbol ? this.symbols.get(symbol) ?? null : null) ?? cIdentifier(name.text);
   }
 
   register(name: ts.Identifier, cName: string): void {
@@ -72,9 +72,9 @@ export class Context {
   private inferType(origin?: ts.Node): string {
     const node = origin ?? this.program.getSourceFiles()[0];
     if (!node) throw new CompilerError("CR102", "<project>", 1, "unresolved C type: no source files");
-    const type = origin ? this.program.getTypeChecker().getTypeAtLocation(origin) : undefined;
+    const type = origin ? this.program.getTypeChecker().getTypeAtLocation(origin) : null;
     const alias = type?.aliasSymbol?.getName();
-    const scalar = alias ? SCALARS[alias] : undefined;
+    const scalar = alias ? SCALARS[alias] ?? null : null;
     if (scalar) return scalar;
     const flags = type?.flags ?? 0;
     if (flags & ts.TypeFlags.BooleanLike) return "bool";
@@ -113,9 +113,9 @@ export class Context {
       types.includes("uint32_t") ? "uint32_t" : "int32_t";
   }
 
-  type(node: ts.TypeNode | undefined, origin?: ts.Node): string {
+  type(node: ts.TypeNode | null, origin?: ts.Node): string {
     if (!node) return this.inferType(origin);
-    if (ts.isParenthesizedTypeNode(node)) return this.type(node.type, origin);
+    if (ts.isParenthesizedTypeNode(node)) return this.type(node.type ?? null, origin);
     if (ts.isTypeReferenceNode(node)) return this.namedType(node);
     if (ts.isUnionTypeNode(node)) return this.unionType(node, origin);
     if (node.kind === ts.SyntaxKind.NumberKeyword || ts.isLiteralTypeNode(node) && ts.isNumericLiteral(node.literal)) return "double";

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
+import { readManifest } from "./manifest.js";
 import { CompilerError, Context, cIdentifier } from "./context.js";
 import { Emitter } from "./emitter.js";
 import { emitProject } from "./project.js";
@@ -19,11 +20,6 @@ export interface CompileResult {
   readonly outputPath: string;
   readonly generatedFiles?: readonly string[];
 }
-
-type Manifest = {
-  target?: { backend?: string; intrinsicAbi?: number; freestanding?: boolean };
-  sourceFiles?: string[];
-};
 
 const header = [
   "/* Croissant: generated from Bake --target=clang. Do not edit. */",
@@ -48,16 +44,8 @@ export function compile(request: CompileRequest): CompileResult {
     throw new Error("CR000: specify exactly one of --out or --out-dir");
   const manifestPath = path.resolve(request.manifestPath);
   const root = path.dirname(manifestPath);
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Manifest;
-  if (manifest.target?.backend !== "clang" || manifest.target?.freestanding !== true) {
-    throw new Error("CR001: input must be Bake --target=clang freestanding output");
-  }
-  if (!manifest.sourceFiles?.length) throw new Error("CR002: Bake manifest has no source files");
-  if (manifest.target.intrinsicAbi !== undefined && manifest.target.intrinsicAbi !== 1) {
-    throw new Error("CR003: unsupported Bake native intrinsic ABI");
-  }
-
-  const files = manifest.sourceFiles.map(relative => {
+  const sourcesListed = readManifest(fs.readFileSync(manifestPath, "utf8"));
+  const files = sourcesListed.map(relative => {
     const abs = path.resolve(root, relative);
     const local = path.relative(root, abs);
     if (local.startsWith("..") || path.isAbsolute(local) || !abs.endsWith(".ts")) {
@@ -81,7 +69,7 @@ export function compile(request: CompileRequest): CompileResult {
   const d = diagnostics[0];
   if (d) {
     const file = d.file?.fileName ?? "<typescript>";
-    const at = d.file && d.start !== undefined ? d.file.getLineAndCharacterOfPosition(d.start).line + 1 : 0;
+    const at = d.file && d.start != null ? d.file.getLineAndCharacterOfPosition(d.start).line + 1 : 0;
     throw new Error("CR006: Bake output failed TypeScript checking (" + diagnostics.length + " errors). " +
       path.relative(root, file) + ":" + at + ": " + ts.flattenDiagnosticMessageText(d.messageText, " "));
   }
@@ -164,7 +152,7 @@ export function compile(request: CompileRequest): CompileResult {
       const fields = properties.map(prop => {
         const key = prop.name;
         if (!key || !ts.isIdentifier(key)) return ctx.fail(prop, "CR306", "computed native record property");
-        const type = ctx.type(prop.type, prop);
+        const type = ctx.type(prop.type ?? null, prop);
         return { name: cIdentifier(key.text), type };
       });
       if (fields.some(field => structs.some(other => other.name === field.type) && !available.has(field.type))) {
@@ -195,7 +183,7 @@ export function compile(request: CompileRequest): CompileResult {
   text.push("");
 
   for (const item of globals) {
-    const type = ctx.type(item.declaration.type, item.declaration.name);
+    const type = ctx.type(item.declaration.type ?? null, item.declaration.name);
     text.push(type + " " + item.name + ";");
   }
   text.push("");
@@ -206,7 +194,7 @@ export function compile(request: CompileRequest): CompileResult {
 
   text.push("void croissant_init_globals(void) {");
   for (const item of globals) {
-    const type = ctx.type(item.declaration.type, item.declaration.name);
+    const type = ctx.type(item.declaration.type ?? null, item.declaration.name);
     const initializer = item.declaration.initializer;
     if (!initializer) return ctx.fail(item.declaration, "CR308", "uninitialised top-level native variable");
     text.push("  " + item.name + " = " + emitter.expression(initializer, type) + ";");

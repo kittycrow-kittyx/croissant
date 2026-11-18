@@ -80,7 +80,7 @@ export function emitProject(input: ProjectInputs): ProjectResult {
     ]), output);
     write(scratch, "include/croissant/globals.h", guards("globals", [
       '#include "croissant/types.h"', "",
-      ...globals.map(item => "extern " + context.type(item.declaration.type, item.declaration.name) +
+      ...globals.map(item => "extern " + context.type(item.declaration.type ?? null, item.declaration.name) +
         " " + item.name + ";"),
       "", "void croissant_init_globals(void);"
     ]), output);
@@ -100,14 +100,14 @@ export function emitProject(input: ProjectInputs): ProjectResult {
     ]), output);
     const initialisations = [
       banner, '#include "croissant/all.h"', "",
-      ...globals.map(item => context.type(item.declaration.type, item.declaration.name) +
+      ...globals.map(item => context.type(item.declaration.type ?? null, item.declaration.name) +
         " " + item.name + ";"), "",
       "void croissant_init_globals(void) {",
       ...globals.map(item => {
         const initial = item.declaration.initializer;
         if (!initial) return context.fail(item.declaration, "CR308", "uninitialised top-level native variable");
         return "  " + item.name + " = " +
-          emitter.expression(initial, context.type(item.declaration.type, item.declaration.name)) + ";";
+          emitter.expression(initial, context.type(item.declaration.type ?? null, item.declaration.name)) + ";";
       }), "}"
     ];
     write(scratch, "src/globals.c", initialisations.join("\n"), output);
