@@ -61,6 +61,12 @@ compiler's integration checks. This helper is not required to compile other
 projects. CI compiles generated translation units for x86-64 and AArch64 and
 runs a linked native fixture.
 
+## Documentation
+
+[Module reference](docs/index.md)
+
+`npm run guards` runs the mandatory strict source, test and documentation checks independently of compilation.
+
 ## Licence
 
 [MIT](LICENSE).
