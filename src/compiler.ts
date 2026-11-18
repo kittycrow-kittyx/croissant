@@ -78,8 +78,8 @@ export function compile(request: CompileRequest): CompileResult {
     noEmit: true
   });
   const diagnostics = ts.getPreEmitDiagnostics(program).filter(d => d.category === ts.DiagnosticCategory.Error);
-  if (diagnostics.length) {
-    const d = diagnostics[0]!;
+  const d = diagnostics[0];
+  if (d) {
     const file = d.file?.fileName ?? "<typescript>";
     const at = d.file && d.start !== undefined ? d.file.getLineAndCharacterOfPosition(d.start).line + 1 : 0;
     throw new Error("CR006: Bake output failed TypeScript checking (" + diagnostics.length + " errors). " +
@@ -87,46 +87,46 @@ export function compile(request: CompileRequest): CompileResult {
   }
 
   const ctx = new Context(program, root);
-  const sourceFiles = files.map(file => program.getSourceFile(file)!);
+  const sourceFiles = files.map(file => {
+    const source = program.getSourceFile(file);
+    if (!source) throw new Error("CR005: manifest source not loaded: " + file);
+    return source;
+  });
   const globals: Array<{ name: string; declaration: ts.VariableDeclaration }> = [];
   const functions: Array<{ name: string; declaration: ts.FunctionDeclaration }> = [];
   const structs: Array<{ name: string; declaration: ts.InterfaceDeclaration }> = [];
   const externals = new Map<string, ts.FunctionDeclaration>();
 
-  // Register all global symbols before compiling bodies, including imports
-  // and calls referencing declarations in a different TypeScript module.
+  // Register every module's symbols before compiling bodies so imported references resolve.
+  const registerInterface = (source: ts.SourceFile, statement: ts.InterfaceDeclaration): void => {
+    const name = statement.name.text.startsWith("__bake_c_") ? statement.name.text : ctx.module(source) + "__" + statement.name.text;
+    ctx.register(statement.name, name);
+    if (!structs.some(entry => entry.name === name)) structs.push({ name, declaration: statement });
+  };
+  const registerFunction = (source: ts.SourceFile, statement: ts.FunctionDeclaration, id: ts.Identifier): void => {
+    const name = id.text.startsWith("__bake_c_") ? id.text : ctx.module(source) + "__" + id.text;
+    ctx.register(id, name);
+    const intrinsic = name.startsWith("__bake_c_");
+    if (intrinsic && statement.body) ctx.fail(statement, "CR301", "compiler intrinsic must be external");
+    if (!intrinsic) { functions.push({ name, declaration: statement }); return; }
+    if (!externals.has(name)) externals.set(name, statement);
+  };
+  const registerGlobals = (source: ts.SourceFile, statement: ts.VariableStatement): void => {
+    for (const decl of statement.declarationList.declarations) {
+      const id = decl.name;
+      if (!ts.isIdentifier(id)) ctx.fail(decl, "CR302", "top-level destructuring unsupported");
+      const name = ctx.module(source) + "__" + id.text;
+      ctx.register(id, name);
+      globals.push({ name, declaration: decl });
+    }
+  };
   for (const source of sourceFiles) {
     for (const statement of source.statements) {
-      if (ts.isInterfaceDeclaration(statement)) {
-        const name = statement.name.text.startsWith("__bake_c_")
-          ? statement.name.text : ctx.module(source) + "__" + statement.name.text;
-        ctx.register(statement.name, name);
-        if (!structs.some(entry => entry.name === name)) {
-          structs.push({ name, declaration: statement });
-        }
-      } else if (ts.isFunctionDeclaration(statement) && statement.name) {
-        const name = statement.name.text.startsWith("__bake_c_")
-          ? statement.name.text : ctx.module(source) + "__" + statement.name.text;
-        ctx.register(statement.name, name);
-        if (name.startsWith("__bake_c_")) {
-          if (statement.body) ctx.fail(statement, "CR301", "compiler intrinsic must be external");
-          if (!externals.has(name)) externals.set(name, statement);
-        } else functions.push({ name, declaration: statement });
-      } else if (ts.isVariableStatement(statement)) {
-        for (const decl of statement.declarationList.declarations) {
-          const id = decl.name;
-          if (!ts.isIdentifier(id)) return ctx.fail(decl, "CR302", "top-level destructuring unsupported");
-          const name = ctx.module(source) + "__" + id.text;
-          ctx.register(id, name);
-          globals.push({ name, declaration: decl });
-        }
-      } else if (ts.isTypeAliasDeclaration(statement) ||
-                 ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement) ||
-                 ts.isEmptyStatement(statement)) {
-        // Erased type imports/exports and scalar aliases are compile-time only.
-      } else {
-        ctx.fail(statement, "CR303", "unsupported module declaration " + ts.SyntaxKind[statement.kind]);
-      }
+      if (ts.isInterfaceDeclaration(statement)) { registerInterface(source, statement); continue; }
+      if (ts.isFunctionDeclaration(statement) && statement.name) { registerFunction(source, statement, statement.name); continue; }
+      if (ts.isVariableStatement(statement)) { registerGlobals(source, statement); continue; }
+      if (ts.isTypeAliasDeclaration(statement) || ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement) || ts.isEmptyStatement(statement)) continue;
+      ctx.fail(statement, "CR303", "unsupported module declaration " + ts.SyntaxKind[statement.kind]);
     }
   }
 
@@ -147,7 +147,8 @@ export function compile(request: CompileRequest): CompileResult {
     if (++rounds > structs.length + 1) throw new Error("CR304: cyclic or incomplete native record layout");
     let advanced = false;
     for (let i = pending.length - 1; i >= 0; i--) {
-      const item = pending[i]!;
+      const item = pending[i];
+      if (!item) throw new Error("CR304: missing pending record");
       const properties = item.declaration.members.filter(ts.isPropertySignature);
       for (const member of item.declaration.members) {
         if (ts.isPropertySignature(member)) continue;
@@ -171,12 +172,9 @@ export function compile(request: CompileRequest): CompileResult {
       }
       text.push("struct " + item.name + " {");
       // Opaque allocation identity is part of the native intrinsic representation.
-      if (item.name === "__bake_c_Buffer") {
-        if (fields.some(field => field.name === "handle")) {
-          ctx.fail(item.declaration, "CR310", "native buffer handle is reserved by the backend");
-        }
-        text.push("  uint64_t handle;");
-      }
+      if (item.name === "__bake_c_Buffer" && fields.some(field => field.name === "handle"))
+        ctx.fail(item.declaration, "CR310", "native buffer handle is reserved by the backend");
+      if (item.name === "__bake_c_Buffer") text.push("  uint64_t handle;");
       for (const field of fields) text.push("  " + field.type + " " + field.name + ";");
       if (!fields.length) text.push("  unsigned char _croissant_empty;");
       text.push("};", "");
@@ -232,7 +230,8 @@ export function compile(request: CompileRequest): CompileResult {
     };
   }
 
-  const outputPath = path.resolve(request.outputPath!);
+  if (!request.outputPath) throw new Error("CR000: missing output path");
+  const outputPath = path.resolve(request.outputPath);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   // Atomic publication ensures a failed compiler cannot leave a partial C file.
   const temp = outputPath + ".tmp";

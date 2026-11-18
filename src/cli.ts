@@ -22,7 +22,7 @@ if (!manifestPath || manifestPath.startsWith("--") ||
   process.exit(2);
 }
 try {
-  const result = compile({ manifestPath, ...(outputPath ? { outputPath } : { outputDir: outputDir! }) });
+  const result = compile({ manifestPath, ...(outputPath ? { outputPath } : outputDir ? { outputDir } : {}) });
   process.stdout.write("Croissant: emitted " + (result.generatedFiles ?
     `${result.generatedFiles.length} structured files in ` : "") + result.outputPath + " from " +
     result.files + " modules (" + result.functions + " functions, " +

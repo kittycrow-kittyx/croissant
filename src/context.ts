@@ -57,8 +57,7 @@ export class Context {
     if (symbol && (symbol.flags & ts.SymbolFlags.Alias)) {
       symbol = checker.getAliasedSymbol(symbol);
     }
-    if (symbol && this.symbols.has(symbol)) return this.symbols.get(symbol)!;
-    return cIdentifier(name.text);
+    return (symbol ? this.symbols.get(symbol) : undefined) ?? cIdentifier(name.text);
   }
 
   register(name: ts.Identifier, cName: string): void {
@@ -70,60 +69,61 @@ export class Context {
     if (symbol) this.symbols.set(symbol, cName);
   }
 
+  private inferType(origin?: ts.Node): string {
+    const node = origin ?? this.program.getSourceFiles()[0];
+    if (!node) throw new CompilerError("CR102", "<project>", 1, "unresolved C type: no source files");
+    const type = origin ? this.program.getTypeChecker().getTypeAtLocation(origin) : undefined;
+    const alias = type?.aliasSymbol?.getName();
+    const scalar = alias ? SCALARS[alias] : undefined;
+    if (scalar) return scalar;
+    const flags = type?.flags ?? 0;
+    if (flags & ts.TypeFlags.BooleanLike) return "bool";
+    if (flags & ts.TypeFlags.BigIntLike) return "uint64_t";
+    if (flags & ts.TypeFlags.NumberLike) return "double";
+    if (flags & ts.TypeFlags.Void) return "void";
+    if (flags & ts.TypeFlags.StringLike) return "const char *";
+    const symbol = type?.symbol;
+    const registered = symbol ? this.symbols.get(symbol) : undefined;
+    return registered ?? this.fail(node, "CR102", "unresolved C type: add a static TypeScript annotation");
+  }
+
+  private namedType(node: ts.TypeReferenceNode): string {
+    if (!ts.isIdentifier(node.typeName)) return this.fail(node, "CR103", "qualified type references are unsupported");
+    const name = node.typeName.text;
+    const scalar = SCALARS[name];
+    if (scalar) return scalar;
+    if (name === "ArrayBufferLike" || name === "ArrayBuffer" || name === "SharedArrayBuffer") return "__bake_c_Buffer";
+    const checker = this.program.getTypeChecker();
+    let symbol = checker.getSymbolAtLocation(node.typeName);
+    if (symbol && (symbol.flags & ts.SymbolFlags.Alias)) symbol = checker.getAliasedSymbol(symbol);
+    const registered = symbol ? this.symbols.get(symbol) : undefined;
+    return registered ?? this.fail(node, "CR104", "unknown user-defined type " + name);
+  }
+
+  private unionType(node: ts.UnionTypeNode, origin?: ts.Node): string {
+    const types = [...new Set(node.types.map(part => this.type(part, origin)))];
+    const first = types[0];
+    if (types.length === 1 && first) return first;
+    if (!types.every(type => ["uint32_t", "int32_t", "uint64_t", "int64_t", "double", "float"].includes(type)))
+      return this.fail(node, "CR105", "union requires a tagged C representation: " + types.join(" | "));
+    if (types.includes("double") || types.includes("float")) return "double";
+    // Mixed signed and unsigned 32-bit values need 33 value bits before widening.
+    if (types.length === 2 && types.includes("int32_t") && types.includes("uint32_t")) return "int64_t";
+    return types.includes("uint64_t") ? "uint64_t" : types.includes("int64_t") ? "int64_t" :
+      types.includes("uint32_t") ? "uint32_t" : "int32_t";
+  }
+
   type(node: ts.TypeNode | undefined, origin?: ts.Node): string {
-    if (!node) {
-      if (origin) {
-        const type = this.program.getTypeChecker().getTypeAtLocation(origin);
-        const alias = type.aliasSymbol?.getName();
-        if (alias && SCALARS[alias]) return SCALARS[alias]!;
-        const flags = type.flags;
-        if (flags & ts.TypeFlags.BooleanLike) return "bool";
-        if (flags & ts.TypeFlags.BigIntLike) return "uint64_t";
-        if (flags & ts.TypeFlags.NumberLike) return "double";
-        if (flags & ts.TypeFlags.Void) return "void";
-        if (flags & ts.TypeFlags.StringLike) return "const char *";
-        const symbol = type.symbol;
-        if (symbol && this.symbols.has(symbol)) return this.symbols.get(symbol)!;
-      }
-      this.fail(origin ?? this.program.getSourceFiles()[0]!, "CR102", "unresolved C type: add a static TypeScript annotation");
-    }
+    if (!node) return this.inferType(origin);
     if (ts.isParenthesizedTypeNode(node)) return this.type(node.type, origin);
-    if (ts.isTypeReferenceNode(node)) {
-      if (!ts.isIdentifier(node.typeName)) this.fail(node, "CR103", "qualified type references are unsupported");
-      const name = node.typeName.text;
-      if (SCALARS[name]) return SCALARS[name]!;
-      if (name === "ArrayBufferLike" || name === "ArrayBuffer" || name === "SharedArrayBuffer") return "__bake_c_Buffer";
-      const checker = this.program.getTypeChecker();
-      let symbol = checker.getSymbolAtLocation(node.typeName);
-      if (symbol && (symbol.flags & ts.SymbolFlags.Alias)) symbol = checker.getAliasedSymbol(symbol);
-      if (symbol && this.symbols.has(symbol)) return this.symbols.get(symbol)!;
-      this.fail(node, "CR104", "unknown user-defined type " + name);
-    }
-    if (ts.isUnionTypeNode(node)) {
-      const choices = node.types.map(part => this.type(part, origin));
-      const unique = [...new Set(choices)];
-      if (unique.length === 1) return unique[0]!;
-      if (unique.every(type => ["uint32_t", "int32_t", "uint64_t", "int64_t", "double", "float"].includes(type))) {
-        if (unique.includes("double") || unique.includes("float")) return "double";
-        // A mixed signed/unsigned 32-bit domain needs all 33 value bits.
-        // Choosing uint32_t changes negative values before widening.
-        if (unique.length === 2 && unique.includes("int32_t") && unique.includes("uint32_t")) return "int64_t";
-        return unique.includes("uint64_t") ? "uint64_t" : unique.includes("int64_t") ? "int64_t" :
-          unique.includes("uint32_t") ? "uint32_t" : "int32_t";
-      }
-      this.fail(node, "CR105", "union requires a tagged C representation: " + unique.join(" | "));
-    }
-    if (node.kind === ts.SyntaxKind.NumberKeyword) return "double";
-    if (node.kind === ts.SyntaxKind.BigIntKeyword) return "uint64_t";
-    if (node.kind === ts.SyntaxKind.BooleanKeyword) return "bool";
+    if (ts.isTypeReferenceNode(node)) return this.namedType(node);
+    if (ts.isUnionTypeNode(node)) return this.unionType(node, origin);
+    if (node.kind === ts.SyntaxKind.NumberKeyword || ts.isLiteralTypeNode(node) && ts.isNumericLiteral(node.literal)) return "double";
+    if (node.kind === ts.SyntaxKind.BigIntKeyword || ts.isLiteralTypeNode(node) && ts.isBigIntLiteral(node.literal)) return "uint64_t";
+    if (node.kind === ts.SyntaxKind.BooleanKeyword || ts.isLiteralTypeNode(node) && (node.literal.kind === ts.SyntaxKind.TrueKeyword || node.literal.kind === ts.SyntaxKind.FalseKeyword)) return "bool";
     if (node.kind === ts.SyntaxKind.VoidKeyword || node.kind === ts.SyntaxKind.NeverKeyword) return "void";
     if (node.kind === ts.SyntaxKind.StringKeyword) return "const char *";
-    if (ts.isArrayTypeNode(node)) this.fail(node, "CR106", "arrays require explicit native view types");
-    if (ts.isLiteralTypeNode(node)) {
-      if (ts.isNumericLiteral(node.literal)) return "double";
-      if (ts.isBigIntLiteral(node.literal)) return "uint64_t";
-      if (node.literal.kind === ts.SyntaxKind.TrueKeyword || node.literal.kind === ts.SyntaxKind.FalseKeyword) return "bool";
-    }
+    if (ts.isArrayTypeNode(node)) return this.fail(node, "CR106", "arrays require explicit native view types");
     return this.fail(node, "CR107", "unsupported TypeScript type " + ts.SyntaxKind[node.kind]);
   }
 }

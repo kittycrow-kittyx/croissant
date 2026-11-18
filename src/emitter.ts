@@ -11,21 +11,94 @@ const op = (kind: ts.SyntaxKind): string => {
   return name;
 };
 
+function numericLiteral(text: string): string {
+  const literal = text.replaceAll("_", "");
+  // TypeScript numeric literals are IEEE-754 doubles, not arbitrary-sized C integers.
+  return /^[0-9]+$/.test(literal) && literal.length >= 16 ? literal + ".0" : literal;
+}
+
 export class Emitter {
   constructor(readonly ctx: Context) {}
 
+  private binary(node: ts.BinaryExpression): string {
+    const f = (expr: ts.Expression, type?: string): string => this.expression(expr, type);
+    const kind = node.operatorToken.kind;
+    if (kind === ts.SyntaxKind.AsteriskAsteriskToken) {
+      return this.ctx.fail(node, "CR203", "exponentiation needs a typed intrinsic");
+    }
+    if (kind === ts.SyntaxKind.GreaterThanGreaterThanGreaterThanToken) {
+      return "croissant_js_ushr(" + f(node.left) + ", " + f(node.right) + ")";
+    }
+    if (kind === ts.SyntaxKind.QuestionQuestionToken) return this.ctx.fail(node, "CR204", "nullish operator survived Bake");
+    const numeric = this.ctx.program.getTypeChecker().getTypeAtLocation(ts.getOriginalNode(node.left));
+    const isBig = (numeric.flags & ts.TypeFlags.BigIntLike) !== 0;
+    const nativeOp: Partial<Record<ts.SyntaxKind, string>> = {
+        [ts.SyntaxKind.AmpersandToken]: "croissant_js_and",
+        [ts.SyntaxKind.BarToken]: "croissant_js_or",
+        [ts.SyntaxKind.CaretToken]: "croissant_js_xor",
+        [ts.SyntaxKind.LessThanLessThanToken]: "croissant_js_shl",
+        [ts.SyntaxKind.GreaterThanGreaterThanToken]: "croissant_js_shr",
+        [ts.SyntaxKind.PercentToken]: "croissant_js_remainder"
+      };
+    const intrinsic = isBig ? undefined : nativeOp[kind];
+    if (intrinsic) return intrinsic + "(" + f(node.left) + ", " + f(node.right) + ")";
+    if (kind === ts.SyntaxKind.CommaToken) return "(" + f(node.left) + ", " + f(node.right) + ")";
+    return "(" + f(node.left) + " " + op(kind) + " " + f(node.right) + ")";
+  }
+
+  private prefix(node: ts.PrefixUnaryExpression): string {
+    const f = (expr: ts.Expression, type?: string): string => this.expression(expr, type);
+    const operator = op(node.operator);
+    if (node.operator === ts.SyntaxKind.MinusToken && ts.isBigIntLiteral(node.operand)) {
+      const literal = node.operand.text.slice(0, -1).replaceAll("_", "");
+      return "(-INT64_C(" + literal + "))";
+    }
+    if (node.operator === ts.SyntaxKind.TildeToken) {
+      const type = this.ctx.program.getTypeChecker().getTypeAtLocation(ts.getOriginalNode(node.operand));
+      return (type.flags & ts.TypeFlags.BigIntLike) ? "(~" + f(node.operand) + ")"
+        : "croissant_js_not(" + f(node.operand) + ")";
+    }
+    return "(" + operator + f(node.operand) + ")";
+  }
+
+  private appendDefaults(node: ts.CallExpression, args: string[], parameters: readonly (ts.ParameterDeclaration | ts.JSDocParameterTag)[]): void {
+    for (const parameter of parameters.slice(args.length)) {
+      if (!ts.isParameter(parameter)) this.ctx.fail(node, "CR209", "JSDoc parameter requires a typed declaration");
+      if (parameter.initializer) { args.push(this.expression(parameter.initializer)); continue; }
+      if (parameter.questionToken) this.ctx.fail(node, "CR207", "optional arguments need an explicit C sentinel");
+      this.ctx.fail(node, "CR208", "missing required argument");
+    }
+  }
+
+  private call(node: ts.CallExpression): string {
+    const f = (expr: ts.Expression, type?: string): string => this.expression(expr, type);
+    if (node.typeArguments?.length) return this.ctx.fail(node, "CR206", "generic runtime function call");
+    const args = node.arguments.map(a => f(a));
+    const checker = this.ctx.program.getTypeChecker();
+    const signature = checker.getResolvedSignature(node);
+    const decl = signature?.declaration;
+    if (decl && "parameters" in decl) this.appendDefaults(node, args, decl.parameters);
+    return f(node.expression) + "(" + args.join(", ") + ")";
+  }
+
+  private field(property: ts.ObjectLiteralElementLike): string {
+    if (ts.isPropertyAssignment(property) && !ts.isIdentifier(property.name)) return this.ctx.fail(property, "CR209", "computed object field");
+    if (ts.isPropertyAssignment(property) && ts.isIdentifier(property.name)) return "." + cIdentifier(property.name.text) + " = " + this.expression(property.initializer);
+    if (ts.isShorthandPropertyAssignment(property)) return "." + cIdentifier(property.name.text) + " = " + this.expression(property.name);
+    return this.ctx.fail(property, "CR210", "unsupported object construction");
+  }
+
+  private object(node: ts.ObjectLiteralExpression, expected?: string): string {
+    const type = expected ?? this.ctx.type(undefined, node);
+    const fields = node.properties.map(property => this.field(property));
+    return "(" + type + "){ " + fields.join(", ") + " }";
+  }
+
   expression(node: ts.Expression, expected?: string): string {
     const f = (expr: ts.Expression, type?: string): string => this.expression(expr, type);
-    if (ts.isIdentifier(node)) {
-      if (node.text === "undefined") return this.ctx.fail(node, "CR201", "undefined has no freestanding C value");
-      return this.ctx.ident(node);
-    }
-    if (ts.isNumericLiteral(node)) {
-      const literal = node.text.replaceAll("_", "");
-      // TypeScript numeric literals are IEEE-754 doubles, not arbitrary-sized C integers.
-      if (/^[0-9]+$/.test(literal) && literal.length >= 16) return literal + ".0";
-      return literal;
-    }
+    if (ts.isIdentifier(node) && node.text === "undefined") return this.ctx.fail(node, "CR201", "undefined has no freestanding C value");
+    if (ts.isIdentifier(node)) return this.ctx.ident(node);
+    if (ts.isNumericLiteral(node)) return numericLiteral(node.text);
     if (ts.isBigIntLiteral(node)) {
       const body = node.text.slice(0, -1).replaceAll("_", "");
       return "UINT64_C(" + body + ")";
@@ -39,45 +112,8 @@ export class Emitter {
         ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
       return f(node.expression, expected);
     }
-    if (ts.isBinaryExpression(node)) {
-      const kind = node.operatorToken.kind;
-      if (kind === ts.SyntaxKind.AsteriskAsteriskToken) {
-        return this.ctx.fail(node, "CR203", "exponentiation needs a typed intrinsic");
-      }
-      if (kind === ts.SyntaxKind.GreaterThanGreaterThanGreaterThanToken) {
-        return "croissant_js_ushr(" + f(node.left) + ", " + f(node.right) + ")";
-      }
-      if (kind === ts.SyntaxKind.QuestionQuestionToken) return this.ctx.fail(node, "CR204", "nullish operator survived Bake");
-      const numeric = this.ctx.program.getTypeChecker().getTypeAtLocation(ts.getOriginalNode(node.left));
-      const isBig = (numeric.flags & ts.TypeFlags.BigIntLike) !== 0;
-      if (!isBig) {
-        const nativeOp: Partial<Record<ts.SyntaxKind, string>> = {
-          [ts.SyntaxKind.AmpersandToken]: "croissant_js_and",
-          [ts.SyntaxKind.BarToken]: "croissant_js_or",
-          [ts.SyntaxKind.CaretToken]: "croissant_js_xor",
-          [ts.SyntaxKind.LessThanLessThanToken]: "croissant_js_shl",
-          [ts.SyntaxKind.GreaterThanGreaterThanToken]: "croissant_js_shr",
-          [ts.SyntaxKind.PercentToken]: "croissant_js_remainder"
-        };
-        const intrinsic = nativeOp[kind];
-        if (intrinsic) return intrinsic + "(" + f(node.left) + ", " + f(node.right) + ")";
-      }
-      if (kind === ts.SyntaxKind.CommaToken) return "(" + f(node.left) + ", " + f(node.right) + ")";
-      return "(" + f(node.left) + " " + op(kind) + " " + f(node.right) + ")";
-    }
-    if (ts.isPrefixUnaryExpression(node)) {
-      const operator = op(node.operator);
-      if (node.operator === ts.SyntaxKind.MinusToken && ts.isBigIntLiteral(node.operand)) {
-        const literal = node.operand.text.slice(0, -1).replaceAll("_", "");
-        return "(-INT64_C(" + literal + "))";
-      }
-      if (node.operator === ts.SyntaxKind.TildeToken) {
-        const type = this.ctx.program.getTypeChecker().getTypeAtLocation(ts.getOriginalNode(node.operand));
-        return (type.flags & ts.TypeFlags.BigIntLike) ? "(~" + f(node.operand) + ")"
-          : "croissant_js_not(" + f(node.operand) + ")";
-      }
-      return "(" + operator + f(node.operand) + ")";
-    }
+    if (ts.isBinaryExpression(node)) return this.binary(node);
+    if (ts.isPrefixUnaryExpression(node)) return this.prefix(node);
     if (ts.isPostfixUnaryExpression(node)) {
       return "(" + f(node.operand) + op(node.operator) + ")";
     }
@@ -91,36 +127,8 @@ export class Emitter {
     if (ts.isElementAccessExpression(node)) {
       return this.ctx.fail(node, "CR205", "unlowered indexed access requires a native C intrinsic");
     }
-    if (ts.isCallExpression(node)) {
-      if (node.typeArguments?.length) return this.ctx.fail(node, "CR206", "generic runtime function call");
-      const args = node.arguments.map(a => f(a));
-      const checker = this.ctx.program.getTypeChecker();
-      const signature = checker.getResolvedSignature(node);
-      const decl = signature?.declaration;
-      if (decl && ("parameters" in decl)) {
-        for (let i = args.length; i < decl.parameters.length; i++) {
-          const parameter = decl.parameters[i]!;
-          if (!ts.isParameter(parameter)) return this.ctx.fail(node, "CR209", "JSDoc parameter requires a typed declaration");
-          if (parameter.initializer) args.push(f(parameter.initializer));
-          else if (parameter.questionToken) return this.ctx.fail(node, "CR207", "optional arguments need an explicit C sentinel");
-          else return this.ctx.fail(node, "CR208", "missing required argument");
-        }
-      }
-      return f(node.expression) + "(" + args.join(", ") + ")";
-    }
-    if (ts.isObjectLiteralExpression(node)) {
-      const type = expected ?? this.ctx.type(undefined, node);
-      const fields: string[] = [];
-      for (const property of node.properties) {
-        if (ts.isPropertyAssignment(property)) {
-          if (!ts.isIdentifier(property.name)) return this.ctx.fail(property, "CR209", "computed object field");
-          fields.push("." + cIdentifier(property.name.text) + " = " + f(property.initializer));
-        } else if (ts.isShorthandPropertyAssignment(property)) {
-          fields.push("." + cIdentifier(property.name.text) + " = " + f(property.name));
-        } else return this.ctx.fail(property, "CR210", "unsupported object construction");
-      }
-      return "(" + type + "){ " + fields.join(", ") + " }";
-    }
+    if (ts.isCallExpression(node)) return this.call(node);
+    if (ts.isObjectLiteralExpression(node)) return this.object(node, expected);
     if (ts.isArrayLiteralExpression(node)) return this.ctx.fail(node, "CR211", "unlowered array construction");
     if (ts.isTemplateExpression(node) || ts.isTaggedTemplateExpression(node)) {
       return this.ctx.fail(node, "CR212", "dynamic JavaScript template expression");
@@ -128,7 +136,18 @@ export class Emitter {
     return this.ctx.fail(node, "CR213", "unsupported expression " + ts.SyntaxKind[node.kind]);
   }
 
+  private forInitial(node: ts.ForStatement): string {
+    const init = node.initializer;
+    if (!init) return "";
+    if (!ts.isVariableDeclarationList(init)) return this.expression(init);
+    const decl = init.declarations[0];
+    if (init.declarations.length !== 1 || !decl) return this.ctx.fail(node, "CR216", "multiple C for-loop declarations");
+    if (!ts.isIdentifier(decl.name) || !decl.initializer) return this.ctx.fail(decl, "CR217", "unsupported for-loop binding");
+    return this.ctx.type(decl.type, decl.name) + " " + decl.name.text + " = " + this.expression(decl.initializer);
+  }
+
   statement(node: ts.Statement, depth: number, returnType: string): string {
+    // Scoped blocks preserve declaration visibility and avoid changing loop or branch lifetimes.
     const pre = indent(depth);
     const f = (e: ts.Expression, expected?: string): string => this.expression(e, expected);
     const s = (n: ts.Statement, level: number): string => this.statement(n, level, returnType);
@@ -164,17 +183,7 @@ export class Emitter {
         " while (" + f(node.expression) + ");\n";
     }
     if (ts.isForStatement(node)) {
-      let initial = "";
-      if (node.initializer) {
-        if (ts.isVariableDeclarationList(node.initializer)) {
-          const declarations = node.initializer.declarations;
-          if (declarations.length !== 1) return this.ctx.fail(node, "CR216", "multiple C for-loop declarations");
-          const decl = declarations[0]!;
-          if (!ts.isIdentifier(decl.name) || !decl.initializer) return this.ctx.fail(decl, "CR217", "unsupported for-loop binding");
-          initial = this.ctx.type(decl.type, decl.name) + " " + decl.name.text +
-            " = " + f(decl.initializer);
-        } else initial = f(node.initializer);
-      }
+      const initial = this.forInitial(node);
       const cond = node.condition ? f(node.condition) : "true";
       const step = node.incrementor ? f(node.incrementor) : "";
       return pre + "for (" + initial + "; " + cond + "; " + step + ") " +
