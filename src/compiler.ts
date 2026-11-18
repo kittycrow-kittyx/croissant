@@ -86,7 +86,7 @@ export function compile(request: CompileRequest): CompileResult {
       path.relative(root, file) + ":" + at + ": " + ts.flattenDiagnosticMessageText(d.messageText, " "));
   }
 
-  const ctx = new Context(program, root);
+  const ctx: Context = new Context(program, root);
   const sourceFiles = files.map(file => {
     const source = program.getSourceFile(file);
     if (!source) throw new Error("CR005: manifest source not loaded: " + file);
