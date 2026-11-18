@@ -7,4 +7,4 @@
 | `compile` | Validate the clang manifest, check TypeScript, register declarations and publish generated C |
 | `CompilerError` | Source-located compiler diagnostic |
 
-Invalid manifests and unsupported native operations throw before publication. The output declares platform-provided intrinsics.
+Invalid manifests and unsupported native operations throw before publication. 

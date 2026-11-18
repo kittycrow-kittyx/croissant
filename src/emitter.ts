@@ -21,6 +21,7 @@ export class Emitter {
   constructor(readonly ctx: Context) {}
 
   private binary(node: ts.BinaryExpression): string {
+    // JavaScript bitwise operations coerce to i32, unlike ordinary floating-point arithmetic.
     const f = (expr: ts.Expression, type?: string): string => this.expression(expr, type);
     const kind = node.operatorToken.kind;
     if (kind === ts.SyntaxKind.AsteriskAsteriskToken) {
@@ -95,6 +96,7 @@ export class Emitter {
   }
 
   expression(node: ts.Expression, expected?: string): string {
+    // Preserve explicit casts and literal widths; delegate compound expressions to their typed emitters.
     const f = (expr: ts.Expression, type?: string): string => this.expression(expr, type);
     if (ts.isIdentifier(node) && node.text === "undefined") return this.ctx.fail(node, "CR201", "undefined has no freestanding C value");
     if (ts.isIdentifier(node)) return this.ctx.ident(node);
