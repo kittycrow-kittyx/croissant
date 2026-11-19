@@ -1,0 +1,108 @@
+name: Transpiler validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Validate transpiler
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Strict Code Guards
+        run: bun run guards
+
+      - name: Type-check transpiler
+        run: bun run check
+
+      - name: Test source contracts
+        run: bun run test:source-contract
+
+      - name: Test modular C emission
+        run: bun run test:modular-c
+
+  transpile:
+    name: Transpile source
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: |
+          bun install
+          bun install --cwd bake --frozen-lockfile
+
+      - name: Transpile fixture source
+        run: |
+          bun bake/src/cli.ts --project test/fixtures/tsconfig.json --out-dir "$GITHUB_WORKSPACE/build/ci-lowered" --target=clang --fail-on-warnings
+          bun src/cli.ts --manifest build/ci-lowered/bake-manifest.json --out-dir build/ci-generated
+
+      - name: Upload generated source
+        uses: actions/upload-artifact@v6
+        with:
+          name: generated-source
+          path: build/ci-generated/
+          if-no-files-found: error
+
+  validate-generated:
+    name: Validate generated source
+    needs: transpile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Download generated source
+        uses: actions/download-artifact@v7
+        with:
+          name: generated-source
+          path: build/ci-generated
+
+      - name: Validate generated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s build/ci-generated/croissant.manifest.json
+          test -s build/ci-generated/src/arithmetic.c
+          test -s build/ci-generated/include/croissant/arithmetic.h
+          mapfile -d '' sources < <(find build/ci-generated/src -type f -name '*.c' -print0 | sort -z)
+          test "${#sources[@]}" -gt 0
+          jq -e '.schema == 1 and (.include | length > 0)' targets.json
+          while IFS= read -r profile; do
+            triple="$(jq -r '.target' <<< "$profile")"
+            flags="$(jq -r '.flags' <<< "$profile")"
+            read -r -a target_flags <<< "$flags"
+            echo "Validating $triple $flags"
+            clang --target="$triple" "${target_flags[@]}" -std=c11 -ffreestanding -fno-builtin -fno-stack-protector -Werror -Ibuild/ci-generated/include -fsyntax-only "${sources[@]}"
+          done < <(jq -c '.include[]' targets.json)
+
+      - name: Test generated C
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'croissant_arithmetic_ts__add' build/ci-generated/src/arithmetic.c
+          grep -F 'croissant_arithmetic_ts__add' build/ci-generated/include/croissant/arithmetic.h
+          jq -e '.format == "modular-freestanding-c" and .intrinsicAbi == 1 and (.sources | index("src/arithmetic.c") != null) and (.headers | index("include/croissant/arithmetic.h") != null)' build/ci-generated/croissant.manifest.json
